@@ -1,1 +1,14 @@
+# Locked dependencies can be OS-specific, so we prefer to automatically generate them each time
 Pipfile.lock
+
+# Python cache files
+__pycache__/
+
+# Editor specific configuration
+.vscode
+.idea
+
+# Automatically created directories
+baselines
+checkpoints
+wandb
