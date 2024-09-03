@@ -1,0 +1,60 @@
+# TODO
+
+- [x] Selfplay
+  - [x] Start with pgx example
+  - [x] Modify to save states and exploration policy
+  - [x] Modify to use exploration policy during selfplay
+  - [x] Use uncertainty
+- [ ] Network
+  - [x] Modify network to have two policy heads (exploration / exploitation)
+  - [ ] Output reward and value uncertainty (local / UBE)
+  - [ ] Maybe change to transformer
+- [x] Add states to replay buffer
+- [ ] Reanalyze
+  - [x] Prioritized sampling from replay buffer
+  - [x] Redo search to calculate targets
+      - [x] Value targets
+      - [x] Exploitation Policy
+      - [~] UBE/Uncertainty?
+- [x] Training
+  - [x] Take samples from reanalyze
+  - [x] Calculate gradients and back-propagate
+- [ ] Evaluation
+  - [ ] Start with pgx example
+  - [ ] Modify to use exploitation policy
+  - [ ] Add search?
+
+
+# Subleq
+
+- Different agent per problem
+- Start with reward = 1 for solving it, 0 for not
+
+Scale of the game = N
+
+State:
+    - Input: one-hot encoded vector of fixed size K   [N x K]
+    - Output: -||- [N x K]
+    - Memory before executing (program): one-hot encoded [N x N]
+
+    - Input after executing: one hot encoded vector of fixed size K   [N x K]
+    - Output after executing: -||- [N x K]
+    - Memory after executing: [N x N]
+
+    - size = 2 (2nk + n*n) = 4nk + 2n^2
+
+Actions:
+    - 1 action per possible byte [1 x N]
+
+Environment:
+    - Predefined input/output for the specific problem
+    - After each action, execute the code on the predefined input
+        - If there is a wrong output -> immediate termination -> 0 reward
+        - If it terminates correctly (all outputs matched), test all on all other input sequences -> reward
+        - Otherwise, 0 reward and game continues
+    - Next observation is the initial state of memory and input/output + state of memory and input/output after executing the code
+
+Architecture:
+
+- "Just an MLP"
+- fully connected, hidden layers ("256 is a good number")

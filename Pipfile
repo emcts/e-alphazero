@@ -4,13 +4,14 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-mctx = {file = "https://github.com/YanivO1123/emctx/archive/main.zip"}
+emctx = {file = "https://github.com/YanivO1123/emctx/archive/main.zip"}
 pgx = "*" # vectorized RL game environments in JAX 
 dm-haiku = "*" # JAX-based neural network library 
 optax = "*" # gradient processing and optimization library for JAX
 omegaconf = "*" # flexible Python configuration system
 pydantic = "*" # data validation library
 wandb = "*" # weights and biases
+flashbax = "*" # experience replay buffers
 
 [dev-packages]
 black = "*"
@@ -18,4 +19,4 @@ isort = "*"
 mypy = "*"
 
 [requires]
-python_version = "3.11"
+python_version = "3.12"
