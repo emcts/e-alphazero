@@ -18,7 +18,7 @@ import flashbax as fbx  # type: ignore
 import chex
 from pgx.experimental import auto_reset  # type: ignore
 
-from network import FullyConnectedAZNet
+from network import EpistemicAZNet
 
 type ForwardFn = hk.TransformedWithState
 type SelfplayOutput = pgx.State
@@ -33,18 +33,18 @@ class Config(pydantic.BaseModel):
     seed: int = 0
     env_id: pgx.EnvId = "minatar-asterix"
     maximum_number_of_iterations: int = 400
-    beta: float
+    beta: float = 0.1
     # network
     hidden_layers: int = 3
     layer_size: int = 64
     # selfplay
-    selfplay_batch_size: int = 4096
-    simulations_per_step: int = 32
-    selfplay_steps: int = 256
+    selfplay_batch_size: int = 64  # FIXME: Return these hyperparameters to normal numbers
+    simulations_per_step: int = 4
+    selfplay_steps: int = 32
     # reanalyze
-    reanalyze_batch_size: int = 4096
-    max_replay_buffer_length: int = 100_000_000
-    min_replay_buffer_length: int = 1024
+    reanalyze_batch_size: int = 64
+    max_replay_buffer_length: int = 1_000_000
+    min_replay_buffer_length: int = 64
     priority_exponent: float = 0.6
     reanalyze_loops_per_selfplay: int = 1
     # training
@@ -57,6 +57,10 @@ class Config(pydantic.BaseModel):
     class Config:
         extra = "forbid"
 
+    # HACK: Should be fine since there will only ever be one `Config`.
+    def __hash__(self):
+        return 0
+
 
 class Context(NamedTuple):
     """Context which stays the same throughout training."""
@@ -68,35 +72,43 @@ class Context(NamedTuple):
     exploitation_recurrent_fn: emctx.EpistemicRecurrentFn
     optimizer: optax.GradientTransformation
 
+    # HACK: Should be fine since there will only ever be one `Context`.
+    def __hash__(self):
+        return 1
+
 
 # Set up the training model and optimizer.
 def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
     def forward_fn(x, is_eval=False):
-        net = FullyConnectedAZNet(
+        net = EpistemicAZNet(  # FIXME: Switch to the other network
             num_actions=env.num_actions,
-            num_hidden_layers=config.hidden_layers,
-            layer_size=config.layer_size,
+            # num_hidden_layers=config.hidden_layers,
+            # layer_size=config.layer_size,
         )
-        policy_out, value_out = net(x, is_training=not is_eval, test_local_stats=False)
-        return policy_out, value_out
+        main_policy_logits, exploration_policy_logits, value, ube = net(
+            x, is_training=not is_eval, test_local_stats=False
+        )
+        return main_policy_logits, exploration_policy_logits, value, ube
 
     return hk.without_apply_rng(hk.transform_with_state(forward_fn))
 
 
-def get_epistemic_recurrent_fn(env: pgx.Env, forward: ForwardFn, exploration: bool) -> emctx.EpistemicRecurrentFn:
+def get_epistemic_recurrent_fn(
+    env: pgx.Env, forward: ForwardFn, batch_size: int, exploration: bool
+) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
         model, rng_key: chex.PRNGKey, action: chex.Array, state: pgx.State
     ) -> tuple[emctx.EpistemicRecurrentFnOutput, pgx.State]:
-        del rng_key
         model_params, model_state = model
 
         current_player = state.current_player
-        state = jax.vmap(env.step)(state, action)
+        keys = jax.random.split(rng_key, batch_size)
+        state = jax.vmap(env.step)(state, action, keys)
         value: chex.Array
         (exploitation_logits, exploration_logits, value, value_epistemic_variance), _ = forward.apply(
             model_params, model_state, state.observation, is_eval=True
         )
-        logits = jax.lax.cond(exploration, exploration_logits, exploitation_logits)
+        logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
 
         # Subtract max from logits to improve numerical stability.
         logits = logits - jnp.max(logits, axis=-1, keepdims=True)
@@ -108,7 +120,7 @@ def get_epistemic_recurrent_fn(env: pgx.Env, forward: ForwardFn, exploration: bo
         discount = -1.0 * jnp.ones_like(value)
         discount = jnp.where(state.terminated, 0.0, discount)
 
-        recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
+        epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
             reward_epistemic_variance=jnp.zeros_like(reward),  # type: ignore  # TODO: local uncertainty
             discount=discount,  # type: ignore
@@ -116,12 +128,12 @@ def get_epistemic_recurrent_fn(env: pgx.Env, forward: ForwardFn, exploration: bo
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
         )
-        return recurrent_fn_output, state
+        return epistemic_recurrent_fn_output, state
 
-    return recurrent_fn  # type: ignore
+    return epistemic_recurrent_fn  # type: ignore
 
 
-@jax.pmap
+@partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
     model_params, model_state = model
     batch_size = config.selfplay_batch_size // len(context.devices)
@@ -186,7 +198,7 @@ class ReanalyzeOutput(NamedTuple):
     exploitation_policy_target: chex.Array
 
 
-@jax.pmap
+@partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def reanalyze(
     model,
     config: Config,
@@ -351,8 +363,8 @@ def main() -> None:
         env=env,
         devices=devices,
         forward=forward,
-        exploration_recurrent_fn=get_epistemic_recurrent_fn(env, forward, True),
-        exploitation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, False),
+        exploration_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.selfplay_batch_size, True),
+        exploitation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.reanalyze_batch_size, False),
         optimizer=optimizer,
     )
 
@@ -387,6 +399,7 @@ def main() -> None:
 
         # Selfplay.
         rng_key, subkey = jax.random.split(rng_key)
+
         states = selfplay(model, config, context, jax.random.split(subkey, len(context.devices)))
         frames += config.selfplay_batch_size * config.selfplay_steps  # TODO: Check if size is the same as `states`.
 
