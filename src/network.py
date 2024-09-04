@@ -102,7 +102,7 @@ class EpistemicAZNet(hk.Module):
         u = hk.Linear(self.num_channels)(u)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
-        u = jnp.tanh(u)
+        u = jnp.exp2(u)
         u = u.reshape((-1,))
 
         return main_policy_logits, exploration_policy_logits, v, u
