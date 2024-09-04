@@ -1,7 +1,6 @@
 import haiku as hk
 import jax
 import jax.numpy as jnp
-import chex
 
 
 class BlockV1(hk.Module):
