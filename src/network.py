@@ -1,6 +1,7 @@
 import haiku as hk
 import jax
 import jax.numpy as jnp
+import chex
 
 
 class BlockV1(hk.Module):
@@ -159,3 +160,81 @@ class FullyConnectedAZNet(hk.Module):
         exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)
 
         return main_policy_logits, exploration_policy_logits, v, u
+
+
+# https://stackoverflow.com/a/77213071
+class LCGHash(hk.Module):
+    def __init__(
+        self,
+        bits_per_hash: int = 24,
+        multiplier: int = 6_364_136_223_846_793_005,
+        increment: int = 1,
+        name="lcg-hash",
+    ):
+        super().__init__(name=name)
+        self.bits_per_hash = bits_per_hash
+        self.binary_set = jnp.zeros(2 ** (bits_per_hash - 3), dtype="uint8")
+        self.multiplier = multiplier
+        self.increment = increment
+
+    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+        # x: [batch_size, ...]
+        x = jnp.asarray(x, dtype="uint64")
+        while len(x.shape) > 1:
+            accumulator = jnp.zeros(x.shape[:-1])
+            for section in jnp.split(x, x.shape[-1], axis=-1):
+                accumulator *= self.multiplier
+                accumulator += self.increment
+                accumulator += section
+            x = accumulator
+        # x: [batch_size]
+
+        indices = x >> (63 - self.bits_per_hash)
+
+        # Get the bit corresponding to the index.
+        byte_indices = indices // 8
+        bit_indices = indices % 8
+        # bytes_from_set: [batch_size]
+        bytes_from_set = self.binary_set[byte_indices]
+        # seen: [batch_size]
+        seen = (bytes_from_set & (1 << bit_indices)) > 0
+
+        return seen
+
+
+class SimHash(hk.Module):
+    def __init__(self, bits_per_hash: int = 24, name="sim-hash"):
+        super().__init__(name=name)
+        self.bits_per_hash = bits_per_hash
+        self.binary_set = jnp.zeros(2 ** (bits_per_hash - 3), dtype="uint8")
+
+    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+        # x: [batch_size, vector_size]
+        x = jnp.reshape(x, (x.shape[0], -1))
+        vector_size = x.shape[-1]
+
+        # random_matrix: [vector_size, bits]
+        random_matrix = hk.get_state(
+            "random_matrix", [vector_size, self.bits_per_hash], init=hk.initializers.RandomNormal()
+        )
+        random_matrix = jax.lax.stop_gradient(random_matrix)
+
+        # product: [batch_size, bits]
+        product = jnp.matmul(x, random_matrix)
+
+        # Get the hash index corresponding to the matrix product of input and random matrix.
+        # See SimHash paper for details.
+        powers_of_two = 2 ** jnp.arange(self.bits_per_hash, dtype=jnp.uint64)
+        masked_powers = jnp.where(product < 0.0, powers_of_two, 0)
+        # indices: [batch_size]
+        indices = jnp.sum(masked_powers, axis=1)
+
+        # Get the bit corresponding to the index.
+        byte_indices = indices // 8
+        bit_indices = indices % 8
+        # bytes_from_set: [batch_size]
+        bytes_from_set = self.binary_set[byte_indices]
+        # seen: [batch_size]
+        seen = (bytes_from_set & (1 << bit_indices)) > 0
+
+        return seen
