@@ -51,6 +51,8 @@ class Config(pydantic.BaseModel):
     learning_rate: float = 0.001
     # checkpoints / eval
     checkpoint_interval: int = 5
+    eval_interval: int = 5
+    evaluation_batch: int = 64
     # targets
     exploration_policy_target_temperature: float = 1.0
 
@@ -304,6 +306,51 @@ def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput)
     return (model, opt_state, absolute_value_error, *losses)
 
 
+@partial(jax.pmap, static_broadcasted_argnums=[1, 2])
+def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
+    model_params, model_state = model
+    batch_size = config.selfplay_batch_size // len(context.devices)
+
+    def cond_fn(tup: tuple[pgx.State, chex.PRNGKey, jnp.ndarray]) -> bool:
+        states, _, _ = tup
+        return ~states.terminated.all()
+
+    def loop_fn(tup: tuple[pgx.State, chex.PRNGKey, jnp.ndarray]) -> tuple[pgx.State, chex.PRNGKey, jnp.ndarray]:
+        states, rng_key, sum_of_rewards = tup
+        rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
+
+        (exploitation_logits, _exploration_logits, value, value_epistemic_variance), _ = context.forward.apply(
+            model_params, model_state, states.observation, is_eval=True
+        )
+        root = emctx.EpistemicRootFnOutput(
+            prior_logits=exploitation_logits,  # type: ignore
+            value=value,  # type: ignore
+            value_epistemic_variance=value_epistemic_variance,  # type: ignore
+            embedding=states,  # type: ignore
+            beta=jnp.zeros_like(value),  # type: ignore
+        )
+        policy_output = emctx.epistemic_gumbel_muzero_policy(
+            params=model,
+            rng_key=key_for_search,
+            root=root,
+            recurrent_fn=context.exploitation_recurrent_fn,
+            num_simulations=config.simulations_per_step,
+            invalid_actions=~states.legal_action_mask,
+            qtransform=emctx.qtransform_completed_by_mix_value,
+        )
+        keys = jax.random.split(key_for_next_step, batch_size)
+        next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
+        rewards = states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
+        return next_states, rng_key, sum_of_rewards + rewards
+
+    rng_key, sub_key = jax.random.split(rng_key)
+    keys = jax.random.split(sub_key, batch_size)
+    states = jax.vmap(context.env.init)(keys)
+
+    states, _, sum_of_rewards = jax.lax.while_loop(cond_fn, loop_fn, (states, rng_key, jnp.zeros(batch_size)))
+    return sum_of_rewards.mean()
+
+
 def main() -> None:
     # Get configuration from CLI.
     config_dict = omegaconf.OmegaConf.from_cli()
@@ -372,6 +419,13 @@ def main() -> None:
     while True:
         print(log)
         wandb.log(log)
+        log = {}
+
+        if iteration % config.eval_interval == 0:
+            # Evaluate network.
+            rng_key, subkey = jax.random.split(rng_key)
+            mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+            log.update({"mean_return": mean_return})
 
         if iteration % config.checkpoint_interval == 0:
             # Save checkpoint.
@@ -385,7 +439,6 @@ def main() -> None:
                     "iteration": iteration,
                     "frames": frames,
                     "hours": hours,
-                    "pgx.__version__": pgx.__version__,
                     "env_id": env.id,
                     "env_version": env.version,
                 }
@@ -393,13 +446,10 @@ def main() -> None:
 
         if iteration >= config.maximum_number_of_iterations:
             break
-
         iteration += 1
-        log = {"iteration": iteration}
 
         # Selfplay.
         rng_key, subkey = jax.random.split(rng_key)
-
         states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
         frames += num_devices * config.selfplay_batch_size * config.selfplay_steps
 
@@ -455,15 +505,17 @@ def main() -> None:
         average_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
         average_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
 
-        log = {
-            "iteration": iteration,
-            "hours": (time.time() - start_time) / 3600,
-            "frames": frames,
-            "train/value_loss": average_value_loss,
-            "train/ube_loss": average_ube_loss,
-            "train/exploitation_policy_loss": average_exploitation_policy_loss,
-            "train/exploration_policy_loss": average_exploration_policy_loss,
-        }
+        log.update(
+            {
+                "iteration": iteration,
+                "hours": (time.time() - start_time) / 3600,
+                "frames": frames,
+                "train/value_loss": average_value_loss,
+                "train/ube_loss": average_ube_loss,
+                "train/exploitation_policy_loss": average_exploitation_policy_loss,
+                "train/exploration_policy_loss": average_exploration_policy_loss,
+            }
+        )
 
 
 if __name__ == "__main__":
