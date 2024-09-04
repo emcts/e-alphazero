@@ -341,10 +341,9 @@ def main() -> None:
         max_length=config.max_replay_buffer_length,
         min_length=max(config.min_replay_buffer_length, config.reanalyze_batch_size),
         sample_batch_size=config.reanalyze_batch_size,
+        add_sequences=True,
+        add_batch_size=num_devices * config.selfplay_batch_size,
         priority_exponent=config.priority_exponent,
-        # TODO: Check these vvv
-        # add_sequences=True,
-        add_batch_size=config.selfplay_batch_size * config.selfplay_steps,
     )
     buffer_state = buffer_fn.init(jax.tree.map(lambda x: x[0], dummy_state))
 
@@ -402,19 +401,20 @@ def main() -> None:
         rng_key, subkey = jax.random.split(rng_key)
 
         states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
-        frames += config.selfplay_batch_size * config.selfplay_steps  # TODO: Check if size is the same as `states`.
+        frames += num_devices * config.selfplay_batch_size * config.selfplay_steps
 
         # Add to buffer.
         # TODO: Check truncation (?)
-        buffer_state = buffer_fn.add(buffer_state, jax.tree.map(lambda x: jnp.concatenate(jnp.concatenate(x)), states))
+        buffer_state = buffer_fn.add(
+            buffer_state, jax.tree.map(lambda x: jnp.concatenate(jnp.swapaxes(x, 1, 2)), states)
+        )
 
         value_loss_list = []
         ube_loss_list = []
         exploitation_policy_loss_list = []
         exploration_policy_loss_list = []
         for _ in range(config.reanalyze_loops_per_selfplay):
-            # FIXME: assert fails for some reason
-            # assert buffer_fn.can_sample(buffer_state)
+            assert buffer_fn.can_sample(buffer_state)
 
             # Reanalyze.
             rng_key, subkey = jax.random.split(rng_key)
