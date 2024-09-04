@@ -311,11 +311,11 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
     model_params, model_state = model
     batch_size = config.selfplay_batch_size // len(context.devices)
 
-    def cond_fn(tup: tuple[pgx.State, chex.PRNGKey, jnp.ndarray]) -> bool:
+    def cond_fn(tup: tuple[pgx.State, chex.PRNGKey, jax.Array]) -> bool:
         states, _, _ = tup
         return ~states.terminated.all()
 
-    def loop_fn(tup: tuple[pgx.State, chex.PRNGKey, jnp.ndarray]) -> tuple[pgx.State, chex.PRNGKey, jnp.ndarray]:
+    def loop_fn(tup: tuple[pgx.State, chex.PRNGKey, jax.Array]) -> tuple[pgx.State, chex.PRNGKey, jax.Array]:
         states, rng_key, sum_of_rewards = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
