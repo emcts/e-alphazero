@@ -426,7 +426,6 @@ def main() -> None:
                 jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
                 jax.random.split(subkey, num_devices),
             )
-            print(reanalyze_output.value_target.shape)
             (
                 model,
                 opt_state,
@@ -436,15 +435,17 @@ def main() -> None:
                 exploitation_policy_loss,
                 exploration_policy_loss,
             ) = train(model, opt_state, context, reanalyze_output)
+            absolute_value_error = jnp.concatenate(absolute_value_error)
 
             # Adjust priorities.
             buffer_state = buffer_fn.set_priorities(buffer_state, batch.indices, absolute_value_error)
 
             # Keep track of losses for logging.
-            value_loss_list.append(value_loss.item())
-            ube_loss_list.append(ube_loss.item())
-            exploitation_policy_loss_list.append(exploitation_policy_loss.item())
-            exploration_policy_loss_list.append(exploration_policy_loss.item())
+            # `.mean()` because we get a separate loss per device.
+            value_loss_list.append(value_loss.mean().item())
+            ube_loss_list.append(ube_loss.mean().item())
+            exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
+            exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
 
             # TODO: Do we also want to log something per inner loop?
 
