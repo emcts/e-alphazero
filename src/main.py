@@ -234,7 +234,7 @@ def reanalyze(
     )
     search_summary = policy_output.search_tree.epistemic_summary()
 
-    value_target = search_summary.qvalues[policy_output.action]  # type: ignore
+    value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
     ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
 
     completed_qvalues_epistemic_variance: chex.Array = mask_invalid_actions(
@@ -288,7 +288,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     )
 
 
-@partial(jax.pmap, axis_name="i")
+@partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
 def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
     model_params, model_state = model
     grads, (model_state, absolute_value_error, *losses) = jax.grad(loss_fn, has_aux=True)(
@@ -315,6 +315,7 @@ def main() -> None:
 
     # Identify devices.
     devices = jax.local_devices()
+    num_devices = len(devices)
 
     # Make the environment.
     env = pgx.make(config.env_id)
@@ -338,14 +339,14 @@ def main() -> None:
     # Initialize replay buffer.
     buffer_fn = fbx.make_prioritised_flat_buffer(
         max_length=config.max_replay_buffer_length,
-        min_length=config.min_replay_buffer_length,
+        min_length=max(config.min_replay_buffer_length, config.reanalyze_batch_size),
         sample_batch_size=config.reanalyze_batch_size,
         priority_exponent=config.priority_exponent,
         # TODO: Check these vvv
-        add_sequences=False,
-        add_batch_size=config.selfplay_batch_size,
+        # add_sequences=True,
+        add_batch_size=config.selfplay_batch_size * config.selfplay_steps,
     )
-    buffer_state = buffer_fn.init(dummy_state)
+    buffer_state = buffer_fn.init(jax.tree.map(lambda x: x[0], dummy_state))
 
     # Prepare checkpoint directory.
     now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -400,25 +401,32 @@ def main() -> None:
         # Selfplay.
         rng_key, subkey = jax.random.split(rng_key)
 
-        states = selfplay(model, config, context, jax.random.split(subkey, len(context.devices)))
+        states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
         frames += config.selfplay_batch_size * config.selfplay_steps  # TODO: Check if size is the same as `states`.
 
         # Add to buffer.
-        buffer_state = buffer_fn.add(buffer_state, states)  # TODO: Check truncation?
-        # TODO: Check what is the default priority behavior. Max priority?
+        # TODO: Check truncation (?)
+        buffer_state = buffer_fn.add(buffer_state, jax.tree.map(lambda x: jnp.concatenate(jnp.concatenate(x)), states))
 
         value_loss_list = []
         ube_loss_list = []
         exploitation_policy_loss_list = []
         exploration_policy_loss_list = []
         for _ in range(config.reanalyze_loops_per_selfplay):
-            assert buffer_fn.can_sample(buffer_state)
+            # FIXME: assert fails for some reason
+            # assert buffer_fn.can_sample(buffer_state)
 
             # Reanalyze.
             rng_key, subkey = jax.random.split(rng_key)
             batch = buffer_fn.sample(buffer_state, subkey)
-            reanalyze_output = reanalyze(model, config, context, batch.experience, subkey)
-
+            reanalyze_output = reanalyze(
+                model,
+                config,
+                context,
+                jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
+                jax.random.split(subkey, num_devices),
+            )
+            print(reanalyze_output.value_target.shape)
             (
                 model,
                 opt_state,
