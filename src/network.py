@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -161,6 +162,35 @@ class FullyConnectedAZNet(hk.Module):
         return main_policy_logits, exploration_policy_logits, v, u
 
 
+# We can't actually use this for inheritance, but we can still reuse the functions.
+class BaseHash(ABC):
+    def __init__(self, bits_per_hash: int):
+        self.bits_per_hash = bits_per_hash
+
+    @abstractmethod
+    def get_indices(self, x) -> tuple[jax.Array, jax.Array]: ...
+
+    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+        binary_set = self.get_binary_set()
+        byte_indices, bit_indices = self.get_indices(x)
+        # bytes_from_set: [batch_size]
+        bytes_from_set = binary_set[byte_indices]
+        # seen: [batch_size]
+        seen = (bytes_from_set & (1 << bit_indices)) > 0
+
+        return seen
+
+    def get_binary_set(self) -> jax.Array:
+        return hk.get_state(
+            "binary_set", [2 ** (self.bits_per_hash - 3)], dtype="uint8", init=hk.initializers.Constant(0)
+        )
+
+    def update(self, x) -> None:
+        binary_set = self.get_binary_set()
+        byte_indices, bit_indices = self.get_indices(x)
+        hk.set_state("binary_set", binary_set.at[byte_indices] | (1 << bit_indices))
+
+
 # https://stackoverflow.com/a/77213071
 class LCGHash(hk.Module):
     def __init__(
@@ -172,11 +202,14 @@ class LCGHash(hk.Module):
     ):
         super().__init__(name=name)
         self.bits_per_hash = bits_per_hash
-        self.binary_set = jnp.zeros(2 ** (bits_per_hash - 3), dtype="uint8")
         self.multiplier = multiplier
         self.increment = increment
 
-    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+    __call__ = BaseHash.__call__
+    get_binary_set = BaseHash.get_binary_set
+    update = BaseHash.update
+
+    def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
         # x: [batch_size, ...]
         x = jnp.asarray(x, dtype="uint64")
         while len(x.shape) > 1:
@@ -189,25 +222,23 @@ class LCGHash(hk.Module):
         # x: [batch_size]
 
         indices = x >> (63 - self.bits_per_hash)
-
         # Get the bit corresponding to the index.
         byte_indices = indices // 8
         bit_indices = indices % 8
-        # bytes_from_set: [batch_size]
-        bytes_from_set = self.binary_set[byte_indices]
-        # seen: [batch_size]
-        seen = (bytes_from_set & (1 << bit_indices)) > 0
 
-        return seen
+        return byte_indices, bit_indices
 
 
 class SimHash(hk.Module):
     def __init__(self, bits_per_hash: int = 24, name="sim-hash"):
         super().__init__(name=name)
         self.bits_per_hash = bits_per_hash
-        self.binary_set = jnp.zeros(2 ** (bits_per_hash - 3), dtype="uint8")
 
-    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+    __call__ = BaseHash.__call__
+    get_binary_set = BaseHash.get_binary_set
+    update = BaseHash.update
+
+    def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
         # x: [batch_size, vector_size]
         x = jnp.reshape(x, (x.shape[0], -1))
         vector_size = x.shape[-1]
@@ -231,9 +262,5 @@ class SimHash(hk.Module):
         # Get the bit corresponding to the index.
         byte_indices = indices // 8
         bit_indices = indices % 8
-        # bytes_from_set: [batch_size]
-        bytes_from_set = self.binary_set[byte_indices]
-        # seen: [batch_size]
-        seen = (bytes_from_set & (1 << bit_indices)) > 0
 
-        return seen
+        return byte_indices, bit_indices
