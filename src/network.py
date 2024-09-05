@@ -140,6 +140,7 @@ class MinatarEpistemicAZNet(hk.Module):
         num_actions,
         num_channels: int = 16,
         hidden_layers_size: int = 64,
+        max_u: int = jnp.iinfo(jnp.int32).max,
         hash_class: Type = SimHash,
         hash_args: dict[str, Any] | None = None,
         name="minatar_az_net",
@@ -150,6 +151,7 @@ class MinatarEpistemicAZNet(hk.Module):
         self.hidden_layers_size = hidden_layers_size
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
+        self.max_u = max_u
 
     def __call__(
         self, x, is_training, test_local_stats, update_hash: bool = False
@@ -187,6 +189,9 @@ class MinatarEpistemicAZNet(hk.Module):
         u = hk.Linear(1)(u)
         u = jnp.exp2(u)
         u = u.reshape((-1,))
+
+        if not is_training:
+            u.clip(min=0, max=self.max_u)
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)

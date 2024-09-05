@@ -30,14 +30,19 @@
 - [x] Pretraining: Start training after X random moves
 - [x] Add auto-debug-params-loading
 - [x] Setup correct default params for minatar
+- [~] Logging
+  - [x] Root UBE
+  - [x] Root value
+  - [x] Raw value
+  - [x] Raw UBE
+  - [ ] Replay buffer uniqueness
+- [x] Pessimistic execution
+- [x] UBE clipped < max_uncertainty which is a HP and > 0
 
 - [ ] Tuning
 - [ ] Change environment to jax_jit env
 - [ ] Generating data from selfplay?
-- [ ] Logging
-  - [ ] Root UBE
-  - [ ] Root value
-  - [ ] Replay buffer uniqueness
+
 - [ ] automated beta scheduling
 
 

@@ -23,8 +23,6 @@ from hashes import LCGHash, SimHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
 
 ForwardFn = hk.TransformedWithState
-SelfplayOutput = pgx.State
-
 
 class Config(pydantic.BaseModel):
     """Hyperparameter configuration"""
@@ -95,6 +93,13 @@ class Context(NamedTuple):
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):
         return 1
+
+class SelfplayOutput(NamedTuple):
+    state: pgx.State
+    root_value: chex.Array
+    root_epistemic_std: chex.Array
+    value_prediction: chex.Array
+    ube_prediction: chex.Array
 
 
 def get_network(env: pgx.Env, config: Config):
@@ -182,7 +187,7 @@ def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
 
-    def pre_training_step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
+    def pre_training_step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, pgx.State]:
         key1, key2 = jax.random.split(key)
         keys = jax.random.split(key2, self_play_batch_size)
         action = jax.random.randint(key1, shape=(self_play_batch_size,), minval=0, maxval=num_actions)
@@ -227,16 +232,24 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             qtransform=emctx.qtransform_completed_by_mix_value,
         )
         keys = jax.random.split(key2, self_play_batch_size)
+        search_summary = policy_output.search_tree.epistemic_summary()
+        root_values = search_summary.value
+        root_epistemic_stds = search_summary.value_epistemic_std
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, policy_output.action, keys)
-        return next_state, states
+        return next_state, SelfplayOutput(next_state, root_values, root_epistemic_stds, value, value_epistemic_variance)
 
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, self_play_batch_size)
-    states = jax.vmap(context.env.init)(keys)
+    starting_states = jax.vmap(context.env.init)(keys)
     key_seq = jax.random.split(rng_key, config.selfplay_steps)
-    _, states = jax.lax.scan(step_fn, states, key_seq)
+    _, data = jax.lax.scan(step_fn, starting_states, key_seq)
+    (states, sum_root_values, sum_root_epistemic_stds, values, value_epistemic_variances) = data
+    mean_root_values = sum_root_values.mean()
+    mean_root_epistemic_stds = sum_root_epistemic_stds.mean()
+    mean_value = values.mean()
+    mean_value_epistemic_variance = value_epistemic_variances.mean()
 
-    return states
+    return SelfplayOutput(states, mean_root_values, mean_root_epistemic_stds, mean_value, mean_value_epistemic_variance)
 
 
 def mask_invalid_actions(logits: chex.Array, invalid_actions: chex.Array) -> chex.Array:
@@ -527,13 +540,26 @@ def main() -> None:
         print(log)
         if config.track:
             wandb.log(log)
-        log = {}
+        log = {"iteration": iteration}
 
         if iteration % config.eval_interval == 0:
             # Evaluate network.
-            rng_key, subkey = jax.random.split(rng_key)
-            mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-            log.update({"mean_return": mean_return.item()})
+            if config.exploitation_beta < 0:
+                # Do regular evaluation
+                original_exploitation_beta = config.exploitation_beta
+                config.exploitation_beta = 0.0
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"regular mean_return": mean_return.item()})
+                # And then do pessim_evaluation
+                config.exploitation_beta = original_exploitation_beta
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"pessimistic_evaluation mean_return": mean_return.item()})
+            else:
+                rng_key, subkey = jax.random.split(rng_key)
+                mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
+                log.update({"mean_return": mean_return.item()})
             sys.stdout.flush()
 
         if iteration % config.checkpoint_interval == 0:
@@ -562,7 +588,16 @@ def main() -> None:
         if frames < config.learning_starts:
             states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
+            (states, mean_root_value, mean_root_epistemic_std, mean_raw_value, mean_ube) = \
+                selfplay(model, config, context, jax.random.split(subkey, num_devices))
+            log.update(
+                {
+                    "mean_raw_value": mean_raw_value.item(),
+                    "mean_root_value": mean_root_value.item(),
+                    "mean_ube": mean_ube.item(),
+                    "mean_root_epistemic_std": mean_root_epistemic_std.item(),
+                }
+            )
 
         frames += num_devices * config.selfplay_batch_size * config.selfplay_steps
 
