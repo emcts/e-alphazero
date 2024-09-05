@@ -125,6 +125,79 @@ class EpistemicAZNet(hk.Module):
         return main_policy_logits, exploration_policy_logits, v, u, ~seen
 
 
+class MinatarEpistemicAZNet(hk.Module):
+    """Epistemic AlphaZero NN architecture for Minatar. Linear layers hidden sizes are all the same, defaults to 64.
+    Body:
+        One Conv2D with 16 channels followed by two linear layers.
+    Policy heads:
+        Two linear layers, Relu activations, no activate on last layer.
+    Value heads:
+        Two linear layers, Relu activations, tanh activate on value and exp2 activate on ube.
+    """
+
+    def __init__(
+        self,
+        num_actions,
+        num_channels: int = 16,
+        hidden_layers_size: int = 64,
+        hash_class: Type = SimHash,
+        hash_args: dict[str, Any] | None = None,
+        name="minatar_az_net",
+    ):
+        super().__init__(name=name)
+        self.num_actions = num_actions
+        self.num_channels = num_channels
+        self.hidden_layers_size = hidden_layers_size
+        self.hash_class = hash_class
+        self.hash_args = hash_args if hash_args is not None else dict()
+
+    def __call__(
+        self, x, is_training, test_local_stats, update_hash: bool = False
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        # Minatar arch. body:
+        x = x.astype(jnp.float32)
+        x = hk.Conv2D(self.num_channels, kernel_shape=3)(x)
+        x = jax.nn.relu(x)
+        x = hk.Flatten()(x)
+        x = hk.Linear(self.hidden_layers_size)(x)
+        x = jax.nn.relu(x)
+        x = hk.Linear(self.hidden_layers_size)(x)
+        x = jax.nn.relu(x)
+
+        # policy head
+        main_policy_logits = hk.Linear(self.hidden_layers_size)(x)
+        main_policy_logits = jax.nn.relu(main_policy_logits)
+        main_policy_logits = hk.Linear(self.num_actions)(main_policy_logits)
+
+        # exploration policy head
+        exploration_policy_logits = hk.Linear(self.hidden_layers_size)(x)
+        exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
+        exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)
+
+        # value head
+        v = hk.Linear(self.hidden_layers_size)(x)
+        v = jax.nn.relu(v)
+        v = hk.Linear(1)(v)
+        v = jnp.tanh(v)
+        v = v.reshape((-1,))
+
+        # ube head
+        u = hk.Linear(self.hidden_layers_size)(x)
+        u = jax.nn.relu(u)
+        u = hk.Linear(1)(u)
+        u = jnp.exp2(u)
+        u = u.reshape((-1,))
+
+        # local uncertainty
+        hash_obj = self.hash_class(**self.hash_args)
+        seen = hash_obj(x)
+
+        if update_hash:
+            hash_obj.update(x)
+
+        return main_policy_logits, exploration_policy_logits, v, u, ~seen
+
+
 class FullyConnectedAZNet(hk.Module):
     """Fully-connected AlphaZero NN architecture."""
 

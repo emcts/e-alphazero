@@ -27,15 +27,18 @@
   - [x] implement hashes
   - [x] add local uncertainty to network
   - [x] use local uncertainty in code
+- [x] Pretraining: Start training after X random moves
+- [x] Add auto-debug-params-loading
+- [x] Setup correct default params for minatar
 
 - [ ] Tuning
 - [ ] Change environment to jax_jit env
 - [ ] Generating data from selfplay?
-
 - [ ] Logging
   - [ ] Root UBE
   - [ ] Root value
   - [ ] Replay buffer uniqueness
+- [ ] automated beta scheduling
 
 
 # Subleq

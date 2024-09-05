@@ -1,10 +1,10 @@
+import random
 from functools import partial
 import datetime
 import time
 import os
 import pickle
-from typing import NamedTuple
-
+from typing import NamedTuple, Type, Any
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -16,45 +16,58 @@ import pydantic
 import wandb
 import flashbax as fbx  # type: ignore
 import chex
+import sys
+
 from pgx.experimental import auto_reset  # type: ignore
+from hashes import LCGHash, SimHash
+from network import EpistemicAZNet, MinatarEpistemicAZNet
 
-from network import EpistemicAZNet
-
-type ForwardFn = hk.TransformedWithState
-type SelfplayOutput = pgx.State
-
-WANDB_PROJECT: str = "e-alphazero"
+ForwardFn = hk.TransformedWithState
+SelfplayOutput = pgx.State
 
 
 class Config(pydantic.BaseModel):
     """Hyperparameter configuration"""
 
     # general
+    debug: bool = False     # If True, automatically loads much smaller hps to make debugging easier
+    auto_seed: bool = True  # If True and seed == 0, seeds with a random seed
     seed: int = 0
-    env_id: pgx.EnvId = "minatar-asterix"
-    maximum_number_of_iterations: int = 400
-    beta: float = 0.1
+    env_id: pgx.EnvId = "minatar-breakout"
+    maximum_number_of_iterations: int = 2000
     # network
-    hidden_layers: int = 3
-    layer_size: int = 64
+    linear_layer_size: int = 128
+    num_channels: int = 16
+    # Local uncertainty parameters
+    hash_class: Type = SimHash
     # selfplay
-    selfplay_batch_size: int = 64  # FIXME: Return these hyperparameters to normal numbers
-    simulations_per_step: int = 4
-    selfplay_steps: int = 32
+    selfplay_batch_size: int = 256  # FIXME: Return these hyperparameters to normal numbers
+    simulations_per_step: int = 64
+    selfplay_steps: int = 256
     # reanalyze
-    reanalyze_batch_size: int = 64
-    max_replay_buffer_length: int = 1_000_000
-    min_replay_buffer_length: int = 64
-    priority_exponent: float = 0.6
+    reanalyze_batch_size: int = 1024
     reanalyze_loops_per_selfplay: int = 1
+    max_replay_buffer_length: int = 1_000_000
+    min_replay_buffer_length: int = 256
+    priority_exponent: float = 0.6
     # training
     learning_rate: float = 0.001
+    learning_starts: int = 5e3 # While buffer size < learning_starts, executes random actions
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
     evaluation_batch: int = 64
     # targets
     exploration_policy_target_temperature: float = 1.0
+    # EMCTS exploration parameters
+    beta: float = 0.0
+    beta_schedule: bool = False     # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
+    # Evaluation
+    num_eval_episodes: int = 32
+    # wandb params
+    track: bool = True  # Whether to use WANDB or not. Disabled in debug
+    wandb_project: str = "e-alphazero"
+    wandb_run_name: str = None
 
     class Config:
         extra = "forbid"
@@ -62,6 +75,9 @@ class Config(pydantic.BaseModel):
     # HACK: Should be fine since there will only ever be one `Config`.
     def __hash__(self):
         return 0
+
+    def __str__(self):
+        return '\n'.join([f'{key}: {value}' for key, value in self.dict().items()])
 
 
 class Context(NamedTuple):
@@ -72,6 +88,7 @@ class Context(NamedTuple):
     forward: ForwardFn
     exploration_recurrent_fn: emctx.EpistemicRecurrentFn
     exploitation_recurrent_fn: emctx.EpistemicRecurrentFn
+    evaluation_recurrent_fn: emctx.EpistemicRecurrentFn
     optimizer: optax.GradientTransformation
 
     # HACK: Should be fine since there will only ever be one `Context`.
@@ -80,11 +97,19 @@ class Context(NamedTuple):
 
 
 def get_network(env: pgx.Env, config: Config):
-    return EpistemicAZNet(  # FIXME: Switch to the other network
-        num_actions=env.num_actions,
-        # num_hidden_layers=config.hidden_layers,
-        # layer_size=config.layer_size,
-    )
+    if "minatar" in config.env_id:
+        return MinatarEpistemicAZNet(
+            num_actions=env.num_actions,
+            num_channels=config.num_channels,
+            hidden_layers_size=config.linear_layer_size,
+            hash_class=config.hash_class,
+        )
+    else:
+        return EpistemicAZNet(  # FIXME: Switch to the other network
+            num_actions=env.num_actions,
+            # num_hidden_layers=config.hidden_layers,
+            # layer_size=config.linear_layer_size,
+        )
 
 
 # Set up the training model and optimizer.
@@ -151,10 +176,32 @@ def get_epistemic_recurrent_fn(
     return epistemic_recurrent_fn  # type: ignore
 
 
+@partial(jax.pmap, static_broadcasted_argnums=[0, 1])
+def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
+    self_play_batch_size = config.selfplay_batch_size // len(context.devices)
+    num_actions = context.env.num_actions
+
+    def pre_training_step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
+        key1, key2 = jax.random.split(key)
+        keys = jax.random.split(key2, self_play_batch_size)
+        action = jax.random.randint(key1, shape=(self_play_batch_size,), minval=0, maxval=num_actions)
+        next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, action, keys)
+        return next_state, states
+
+    rng_key, sub_key = jax.random.split(rng_key)
+    keys = jax.random.split(sub_key, self_play_batch_size)
+    states = jax.vmap(context.env.init)(keys)
+    key_seq = jax.random.split(rng_key, config.selfplay_steps)
+    _, states = jax.lax.scan(pre_training_step_fn, states, key_seq)
+
+    return states
+
+
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
     model_params, model_state = model
-    batch_size = config.selfplay_batch_size // len(context.devices)
+    self_play_batch_size = config.selfplay_batch_size // len(context.devices)
+    num_actions = context.env.num_actions
 
     def step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
         key1, key2 = jax.random.split(key)
@@ -178,12 +225,19 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.qtransform_completed_by_mix_value,
         )
-        keys = jax.random.split(key2, batch_size)
+        keys = jax.random.split(key2, self_play_batch_size)
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, policy_output.action, keys)
         return next_state, states
 
+    def pre_training_step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
+        key1, key2 = jax.random.split(key)
+        keys = jax.random.split(key2, self_play_batch_size)
+        action = jax.random.randint(key1, shape=(self_play_batch_size,), minval=0, maxval=num_actions)
+        next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, action, keys)
+        return next_state, states
+
     rng_key, sub_key = jax.random.split(rng_key)
-    keys = jax.random.split(sub_key, batch_size)
+    keys = jax.random.split(sub_key, self_play_batch_size)
     states = jax.vmap(context.env.init)(keys)
     key_seq = jax.random.split(rng_key, config.selfplay_steps)
     _, states = jax.lax.scan(step_fn, states, key_seq)
@@ -342,7 +396,7 @@ def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput)
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
     model_params, model_state = model
-    batch_size = config.selfplay_batch_size // len(context.devices)
+    batch_size = config.num_eval_episodes // len(context.devices)
 
     def cond_fn(tup: tuple[pgx.State, chex.PRNGKey, jax.Array]) -> bool:
         states, _, _ = tup
@@ -366,7 +420,7 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
             params=model,
             rng_key=key_for_search,
             root=root,
-            recurrent_fn=context.exploitation_recurrent_fn,
+            recurrent_fn=context.evaluation_recurrent_fn,
             num_simulations=config.simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.qtransform_completed_by_mix_value,
@@ -388,10 +442,35 @@ def main() -> None:
     # Get configuration from CLI.
     config_dict = omegaconf.OmegaConf.from_cli()
     config: Config = Config(**config_dict)  # type: ignore
-    print(config)
+
+    if config.debug:
+        config.selfplay_batch_size = 32  # FIXME: Return these hyperparameters to normal numbers
+        config.simulations_per_step = 16
+        config.selfplay_steps = 64
+        config.reanalyze_batch_size = 64
+        config.max_replay_buffer_length = 100_000
+        config.min_replay_buffer_length = 64
+        config.learning_starts = 1000
+        config.track = False
+        config.maximum_number_of_iterations = max(10, int(config.learning_starts /
+                                                  (config.selfplay_steps * config.selfplay_batch_size) + 3))
+
+    if config.auto_seed and config.seed == 0:
+        config.seed = random.randint(1, 100000)
+
+    # Make sure min replay buffer length makes sense
+    if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
+        config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
+
+    if config.wandb_run_name is None:
+        config.wandb_run_name = f"{config.env_id}_beta={config.beta}_{config.seed}" \
+                                f"_{time.asctime(time.localtime(time.time()))}"
+
+    print(f"Printing the config:\n{config}", flush=True)
 
     # Initialize Weights & Biases.
-    wandb.init(project=WANDB_PROJECT, config=config.model_dump())
+    if config.track:
+        wandb.init(project=config.wandb_project, config=config.model_dump())
 
     # Identify devices.
     devices = jax.local_devices()
@@ -445,20 +524,23 @@ def main() -> None:
         forward=forward,
         exploration_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.selfplay_batch_size, True),
         exploitation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.reanalyze_batch_size, False),
+        evaluation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.num_eval_episodes, False),
         optimizer=optimizer,
     )
 
     # Training loop
     while True:
         print(log)
-        wandb.log(log)
+        if config.track:
+            wandb.log(log)
         log = {}
 
         if iteration % config.eval_interval == 0:
             # Evaluate network.
             rng_key, subkey = jax.random.split(rng_key)
             mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
-            log.update({"mean_return": mean_return})
+            log.update({"mean_return": mean_return.item()})
+            sys.stdout.flush()
 
         if iteration % config.checkpoint_interval == 0:
             # Save checkpoint.
@@ -483,7 +565,11 @@ def main() -> None:
 
         # Selfplay.
         rng_key, subkey = jax.random.split(rng_key)
-        states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
+        if frames < config.learning_starts:
+            states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
+        else:
+            states = selfplay(model, config, context, jax.random.split(subkey, num_devices))
+
         frames += num_devices * config.selfplay_batch_size * config.selfplay_steps
 
         # Add to buffer.
@@ -496,59 +582,72 @@ def main() -> None:
         ube_loss_list = []
         exploitation_policy_loss_list = []
         exploration_policy_loss_list = []
-        for _ in range(config.reanalyze_loops_per_selfplay):
-            assert buffer_fn.can_sample(buffer_state)
 
-            # Reanalyze.
-            rng_key, subkey = jax.random.split(rng_key)
-            batch = buffer_fn.sample(buffer_state, subkey)
-            reanalyze_output = reanalyze(
-                model,
-                config,
-                context,
-                jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
-                jax.random.split(subkey, num_devices),
+        # If the buffer doesn't have enough interactions yet, keep interacting, or learning shouldn't start yet
+        if not buffer_fn.can_sample(buffer_state) or frames < config.learning_starts:
+            log.update(
+                {
+                    "iteration": iteration,
+                    "hours": (time.time() - start_time) / 3600,
+                    "frames": frames,
+                    "executing random moves until": config.learning_starts,
+                }
             )
-            (
-                model,
-                opt_state,
-                absolute_value_error,
-                value_loss,
-                ube_loss,
-                exploitation_policy_loss,
-                exploration_policy_loss,
-            ) = train(model, opt_state, context, reanalyze_output)
-            absolute_value_error = jnp.concatenate(absolute_value_error)
+            continue
+        else:
+            for _ in range(config.reanalyze_loops_per_selfplay):
+                assert buffer_fn.can_sample(buffer_state)
 
-            # Adjust priorities.
-            buffer_state = buffer_fn.set_priorities(buffer_state, batch.indices, absolute_value_error)
+                # Reanalyze.
+                rng_key, subkey = jax.random.split(rng_key)
+                batch = buffer_fn.sample(buffer_state, subkey)
+                reanalyze_output = reanalyze(
+                    model,
+                    config,
+                    context,
+                    jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
+                    jax.random.split(subkey, num_devices),
+                )
+                (
+                    model,
+                    opt_state,
+                    absolute_value_error,
+                    value_loss,
+                    ube_loss,
+                    exploitation_policy_loss,
+                    exploration_policy_loss,
+                ) = train(model, opt_state, context, reanalyze_output)
+                absolute_value_error = jnp.concatenate(absolute_value_error)
 
-            # Keep track of losses for logging.
-            # `.mean()` because we get a separate loss per device.
-            value_loss_list.append(value_loss.mean().item())
-            ube_loss_list.append(ube_loss.mean().item())
-            exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
-            exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
+                # Adjust priorities.
+                buffer_state = buffer_fn.set_priorities(buffer_state, batch.indices, absolute_value_error)
 
-            # TODO: Do we also want to log something per inner loop?
+                # Keep track of losses for logging.
+                # `.mean()` because we get a separate loss per device.
+                value_loss_list.append(value_loss.mean().item())
+                ube_loss_list.append(ube_loss.mean().item())
+                exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
+                exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
 
-        # Calculate average losses for logging.
-        average_value_loss = sum(value_loss_list) / len(value_loss_list)
-        average_ube_loss = sum(ube_loss_list) / len(ube_loss_list)
-        average_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
-        average_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
+                # TODO: Do we also want to log something per inner loop?
 
-        log.update(
-            {
-                "iteration": iteration,
-                "hours": (time.time() - start_time) / 3600,
-                "frames": frames,
-                "train/value_loss": average_value_loss,
-                "train/ube_loss": average_ube_loss,
-                "train/exploitation_policy_loss": average_exploitation_policy_loss,
-                "train/exploration_policy_loss": average_exploration_policy_loss,
-            }
-        )
+            # Calculate average losses for logging.
+            average_value_loss = sum(value_loss_list) / len(value_loss_list)
+            average_ube_loss = sum(ube_loss_list) / len(ube_loss_list)
+            average_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
+            average_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
+
+            log.update(
+                {
+                    "iteration": iteration,
+                    "hours": (time.time() - start_time) / 3600,
+                    "frames": frames,
+                    "train/value_loss": average_value_loss,
+                    "train/ube_loss": average_ube_loss,
+                    "train/exploitation_policy_loss": average_exploitation_policy_loss,
+                    "train/exploration_policy_loss": average_exploration_policy_loss,
+                }
+            )
 
 
 if __name__ == "__main__":
