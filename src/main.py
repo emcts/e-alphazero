@@ -60,7 +60,8 @@ class Config(pydantic.BaseModel):
     # targets
     exploration_policy_target_temperature: float = 1.0
     # EMCTS exploration parameters
-    beta: float = 0.0
+    exploration_beta: pydantic.confloat(ge=0.0) = 0.0   # used in emctx, if > 0 conducts EMCTS exploration.
+    exploitation_beta: pydantic.confloat(le=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
     beta_schedule: bool = False     # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
     num_eval_episodes: int = 32
@@ -214,7 +215,7 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=config.beta * jnp.ones_like(value),  # type: ignore
+            beta=config.exploration_beta * jnp.ones_like(value),  # type: ignore
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,
@@ -407,7 +408,7 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=jnp.zeros_like(value),  # type: ignore
+            beta=config.exploitation_beta * jnp.ones_like(value),  # type: ignore
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,
@@ -456,7 +457,7 @@ def main() -> None:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
 
     if config.wandb_run_name is None:
-        config.wandb_run_name = f"{config.env_id}_beta={config.beta}_{config.seed}" \
+        config.wandb_run_name = f"{config.env_id}_beta={config.exploration_beta}_{config.seed}" \
                                 f"_{time.asctime(time.localtime(time.time()))}"
 
     print(f"Printing the config:\n{config}", flush=True)
