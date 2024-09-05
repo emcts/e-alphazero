@@ -5,9 +5,9 @@
   - [x] Modify to save states and exploration policy
   - [x] Modify to use exploration policy during selfplay
   - [x] Use uncertainty
-- [ ] Network
+- [~] Network
   - [x] Modify network to have two policy heads (exploration / exploitation)
-  - [ ] Output reward and value uncertainty (local / UBE)
+  - [x] Output reward and value uncertainty (local / UBE)
   - [ ] Maybe change to transformer
 - [x] Add states to replay buffer
 - [ ] Reanalyze
@@ -15,14 +15,27 @@
   - [x] Redo search to calculate targets
       - [x] Value targets
       - [x] Exploitation Policy
-      - [~] UBE/Uncertainty?
+      - [x] UBE/Uncertainty?
 - [x] Training
   - [x] Take samples from reanalyze
   - [x] Calculate gradients and back-propagate
-- [ ] Evaluation
-  - [ ] Start with pgx example
-  - [ ] Modify to use exploitation policy
-  - [ ] Add search?
+- [x] Evaluation
+  - [x] Start with pgx example
+  - [x] Modify to use exploitation policy
+  - [x] Add search?
+- [x] Local uncertainty
+  - [x] implement hashes
+  - [x] add local uncertainty to network
+  - [x] use local uncertainty in code
+
+- [ ] Tuning
+- [ ] Change environment to jax_jit env
+- [ ] Generating data from selfplay?
+
+- [ ] Logging
+  - [ ] Root UBE
+  - [ ] Root value
+  - [ ] Replay buffer uniqueness
 
 
 # Subleq
