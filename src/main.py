@@ -79,18 +79,34 @@ class Context(NamedTuple):
         return 1
 
 
+def get_network(env: pgx.Env, config: Config):
+    return EpistemicAZNet(  # FIXME: Switch to the other network
+        num_actions=env.num_actions,
+        # num_hidden_layers=config.hidden_layers,
+        # layer_size=config.layer_size,
+    )
+
+
 # Set up the training model and optimizer.
 def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
-    def forward_fn(x, is_eval=False):
-        net = EpistemicAZNet(  # FIXME: Switch to the other network
-            num_actions=env.num_actions,
-            # num_hidden_layers=config.hidden_layers,
-            # layer_size=config.layer_size,
+    def forward_fn(
+        x, is_training: bool = True, update_hash: bool = False
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        net = get_network(env, config)
+        (
+            exploitation_policy_logits,
+            exploration_policy_logits,
+            value,
+            value_epistemic_variance,
+            reward_epistemic_variance,
+        ) = net(x, is_training=is_training, test_local_stats=False, update_hash=update_hash)
+        return (
+            exploitation_policy_logits,
+            exploration_policy_logits,
+            value,
+            value_epistemic_variance,
+            reward_epistemic_variance,
         )
-        main_policy_logits, exploration_policy_logits, value, ube = net(
-            x, is_training=not is_eval, test_local_stats=False
-        )
-        return main_policy_logits, exploration_policy_logits, value, ube
 
     return hk.without_apply_rng(hk.transform_with_state(forward_fn))
 
@@ -107,8 +123,8 @@ def get_epistemic_recurrent_fn(
         keys = jax.random.split(rng_key, batch_size)
         state = jax.vmap(env.step)(state, action, keys)
         value: chex.Array
-        (exploitation_logits, exploration_logits, value, value_epistemic_variance), _ = forward.apply(
-            model_params, model_state, state.observation, is_eval=True
+        (exploitation_logits, exploration_logits, value, value_epistemic_variance, reward_epistemic_variance), _ = (
+            forward.apply(model_params, model_state, state.observation, is_training=False)
         )
         logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
 
@@ -124,7 +140,7 @@ def get_epistemic_recurrent_fn(
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
-            reward_epistemic_variance=jnp.zeros_like(reward),  # type: ignore  # TODO: local uncertainty
+            reward_epistemic_variance=reward_epistemic_variance,  # type: ignore
             discount=discount,  # type: ignore
             prior_logits=logits,  # type: ignore
             value=value,  # type: ignore
@@ -143,8 +159,8 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
     def step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
         key1, key2 = jax.random.split(key)
 
-        (_exploitation_logits, exploration_logits, value, value_epistemic_variance), _ = context.forward.apply(
-            model_params, model_state, states.observation, is_eval=True
+        (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
+            context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploration_logits,  # type: ignore
@@ -215,8 +231,8 @@ def reanalyze(
     observation = states.observation
     invalid_actions = ~states.legal_action_mask
 
-    (exploitation_logits, exploration_logits, value, value_epistemic_variance), _ = context.forward.apply(
-        model_params, model_state, observation, is_eval=True
+    (exploitation_logits, _exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
+        context.forward.apply(model_params, model_state, observation, is_training=False)
     )
     root = emctx.EpistemicRootFnOutput(
         prior_logits=exploitation_logits,  # type: ignore
@@ -257,8 +273,10 @@ def reanalyze(
 
 
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
-    (exploitation_logits, exploration_logits, value, value_epistemic_variance), _ = context.forward.apply(
-        model_params, model_state, reanalyze_output.observation, is_eval=False
+    (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
+        context.forward.apply(
+            model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
+        )
     )
 
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
@@ -301,8 +319,6 @@ def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput)
     model_params = optax.apply_updates(model_params, updates)
     model = (model_params, model_state)
 
-    # TODO: train/update local uncertainty
-
     return (model, opt_state, absolute_value_error, *losses)
 
 
@@ -319,8 +335,8 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
         states, rng_key, sum_of_rewards = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
-        (exploitation_logits, _exploration_logits, value, value_epistemic_variance), _ = context.forward.apply(
-            model_params, model_state, states.observation, is_eval=True
+        (exploitation_logits, _exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
+            context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploitation_logits,  # type: ignore

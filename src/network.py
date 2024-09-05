@@ -1,3 +1,5 @@
+from typing import Type, Any
+
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -45,6 +47,8 @@ class EpistemicAZNet(hk.Module):
         num_channels: int = 16,  # FIXME: Make 64 again
         num_blocks: int = 2,  # FIXME: Make 5 again
         resnet_v2: bool = True,
+        hash_class: Type = SimHash,
+        hash_args: dict[str, Any] | None = None,
         name="az_net",
     ):
         super().__init__(name=name)
@@ -52,9 +56,13 @@ class EpistemicAZNet(hk.Module):
         self.num_channels = num_channels
         self.num_blocks = num_blocks
         self.resnet_v2 = resnet_v2
-        self.resnet_cls = BlockV2 if resnet_v2 else BlockV1
+        self.resnet_class = BlockV2 if resnet_v2 else BlockV1
+        self.hash_class = hash_class
+        self.hash_args = hash_args if hash_args is not None else dict()
 
-    def __call__(self, x, is_training, test_local_stats):
+    def __call__(
+        self, x, is_training, test_local_stats, update_hash: bool = False
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         x = x.astype(jnp.float32)
         x = hk.Conv2D(self.num_channels, kernel_shape=3)(x)
 
@@ -63,7 +71,7 @@ class EpistemicAZNet(hk.Module):
             x = jax.nn.relu(x)
 
         for i in range(self.num_blocks):
-            x = self.resnet_cls(self.num_channels, name=f"block_{i}")(x, is_training, test_local_stats)
+            x = self.resnet_class(self.num_channels, name=f"block_{i}")(x, is_training, test_local_stats)  # type: ignore
 
         if self.resnet_v2:
             x = hk.BatchNorm(True, True, 0.9)(x, is_training, test_local_stats)
@@ -107,7 +115,14 @@ class EpistemicAZNet(hk.Module):
         u = jnp.exp2(u)
         u = u.reshape((-1,))
 
-        return main_policy_logits, exploration_policy_logits, v, u
+        # local uncertainty
+        hash_obj = self.hash_class(**self.hash_args)
+        seen = hash_obj(x)
+
+        if update_hash:
+            hash_obj.update(x)
+
+        return main_policy_logits, exploration_policy_logits, v, u, seen
 
 
 class FullyConnectedAZNet(hk.Module):
@@ -118,14 +133,20 @@ class FullyConnectedAZNet(hk.Module):
         num_actions,
         num_hidden_layers: int = 3,
         layer_size: int = 64,
+        hash_class: Type = SimHash,
+        hash_args: dict[str, Any] | None = None,
         name="fc_az_net",
     ):
         super().__init__(name=name)
         self.num_actions = num_actions
         self.num_hidden_layers = num_hidden_layers
         self.hidden_layer_size = layer_size
+        self.hash_class = hash_class
+        self.hash_args = hash_args if hash_args is not None else dict()
 
-    def __call__(self, x, is_training, test_local_stats):
+    def __call__(
+        self, x, is_training, test_local_stats, update_hash: bool = False
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         # body
         x = x.astype(jnp.float32)
         for i in range(self.num_hidden_layers):
@@ -160,4 +181,11 @@ class FullyConnectedAZNet(hk.Module):
         exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
         exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)
 
-        return main_policy_logits, exploration_policy_logits, v, u
+        # local uncertainty
+        hash_obj = self.hash_class(**self.hash_args)
+        seen = hash_obj(x)
+
+        if update_hash:
+            hash_obj.update(x)
+
+        return main_policy_logits, exploration_policy_logits, v, u, seen

@@ -12,7 +12,7 @@ class BaseHash(ABC):
     @abstractmethod
     def get_indices(self, x) -> tuple[jax.Array, jax.Array]: ...
 
-    def __call__(self, x, is_training, test_local_stats) -> jax.Array:
+    def __call__(self, x) -> jax.Array:
         binary_set = self.get_binary_set()
         byte_indices, bit_indices = self.get_indices(x)
         # bytes_from_set: [batch_size]
@@ -24,13 +24,16 @@ class BaseHash(ABC):
 
     def get_binary_set(self) -> jax.Array:
         return hk.get_state(
-            "binary_set", [2 ** (self.bits_per_hash - 3)], dtype="uint8", init=hk.initializers.Constant(0)
+            "binary_set", [2 ** (self.bits_per_hash - 3)], dtype=jnp.uint8, init=hk.initializers.Constant(0)
         )
 
     def update(self, x) -> None:
         binary_set = self.get_binary_set()
         byte_indices, bit_indices = self.get_indices(x)
-        hk.set_state("binary_set", binary_set.at[byte_indices] | (1 << bit_indices))
+        new_bytes = binary_set[byte_indices] | (1 << bit_indices)
+        new_bytes = jnp.asarray(new_bytes, dtype=jnp.uint8)
+        binary_set = binary_set.at[byte_indices].set(new_bytes)
+        hk.set_state("binary_set", binary_set)
 
 
 # https://stackoverflow.com/a/77213071
@@ -40,9 +43,10 @@ class LCGHash(hk.Module):
         bits_per_hash: int = 24,
         multiplier: int = 6_364_136_223_846_793_005,
         increment: int = 1,
-        name="lcg-hash",
+        name="lcg_hash",
     ):
         super().__init__(name=name)
+        assert 0 < bits_per_hash <= 32
         self.bits_per_hash = bits_per_hash
         self.multiplier = multiplier
         self.increment = increment
@@ -53,7 +57,7 @@ class LCGHash(hk.Module):
 
     def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
         # x: [batch_size, ...]
-        x = jnp.asarray(x, dtype="uint64")
+        x = jnp.asarray(x, dtype=jnp.uint64)
         while len(x.shape) > 1:
             accumulator = jnp.zeros(x.shape[:-1])
             for section in jnp.split(x, x.shape[-1], axis=-1):
@@ -72,8 +76,9 @@ class LCGHash(hk.Module):
 
 
 class SimHash(hk.Module):
-    def __init__(self, bits_per_hash: int = 24, name="sim-hash"):
+    def __init__(self, bits_per_hash: int = 24, name="sim_hash"):
         super().__init__(name=name)
+        assert 0 < bits_per_hash <= 32
         self.bits_per_hash = bits_per_hash
 
     __call__ = BaseHash.__call__
@@ -96,7 +101,7 @@ class SimHash(hk.Module):
 
         # Get the hash index corresponding to the matrix product of input and random matrix.
         # See SimHash paper for details.
-        powers_of_two = 2 ** jnp.arange(self.bits_per_hash, dtype=jnp.uint64)
+        powers_of_two = 2 ** jnp.arange(self.bits_per_hash, dtype=jnp.uint32)
         masked_powers = jnp.where(product < 0.0, powers_of_two, 0)
         # indices: [batch_size]
         indices = jnp.sum(masked_powers, axis=1)
