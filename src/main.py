@@ -273,11 +273,28 @@ def reanalyze(
 
 
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
-    (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
-        context.forward.apply(
-            model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
-        )
+    (
+        exploitation_logits,
+        exploration_logits,
+        value,
+        value_epistemic_variance,
+        reward_epistemic_variance,
+    ), model_state = context.forward.apply(
+        model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
     )
+
+    # TODO: Remove after testing
+    # jax.debug.print("before {a}", a=reward_epistemic_variance)
+    # (
+    #     exploitation_logits,
+    #     exploration_logits,
+    #     value,
+    #     value_epistemic_variance,
+    #     reward_epistemic_variance,
+    # ), model_state = context.forward.apply(
+    #     model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
+    # )
+    # jax.debug.print("after {a}", a=reward_epistemic_variance)
 
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
     value_loss = jnp.mean(value_loss)  # TODO: figure out if mask is needed because of episode truncation
