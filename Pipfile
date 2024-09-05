@@ -12,6 +12,7 @@ omegaconf = "*" # flexible Python configuration system
 pydantic = "*" # data validation library
 wandb = "*" # weights and biases
 flashbax = "*" # experience replay buffers
+jit_env = "*" # JAX compatible RL environment API
 
 [dev-packages]
 black = "*"
