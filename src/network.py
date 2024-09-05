@@ -122,7 +122,7 @@ class EpistemicAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, seen
+        return main_policy_logits, exploration_policy_logits, v, u, ~seen
 
 
 class FullyConnectedAZNet(hk.Module):
@@ -188,4 +188,4 @@ class FullyConnectedAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, seen
+        return main_policy_logits, exploration_policy_logits, v, u, ~seen
