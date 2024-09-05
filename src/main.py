@@ -229,13 +229,6 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, policy_output.action, keys)
         return next_state, states
 
-    def pre_training_step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
-        key1, key2 = jax.random.split(key)
-        keys = jax.random.split(key2, self_play_batch_size)
-        action = jax.random.randint(key1, shape=(self_play_batch_size,), minval=0, maxval=num_actions)
-        next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, action, keys)
-        return next_state, states
-
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, self_play_batch_size)
     states = jax.vmap(context.env.init)(keys)
