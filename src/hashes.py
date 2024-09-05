@@ -41,34 +41,38 @@ class LCGHash(hk.Module):
     def __init__(
         self,
         bits_per_hash: int = 24,
-        multiplier: int = 6_364_136_223_846_793_005,
-        increment: int = 1,
         name="lcg_hash",
     ):
         super().__init__(name=name)
         assert 0 < bits_per_hash <= 32
         self.bits_per_hash = bits_per_hash
-        self.multiplier = multiplier
-        self.increment = increment
 
     __call__ = BaseHash.__call__
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
     def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
+        # TODO: Maybe try larger constants later
+        # REMINDER: Set environment variable JAX_ENABLE_X64=True
+        # FIXME: scatter inputs have incompatible types: cannot safely cast value from dtype=int64 to dtype=int32
+        MULTIPLIER: int = 29943829
+        INCREMENT: int = 1
+        TOP_BIT: int = 32
+        MODULUS: int = 1 << TOP_BIT
+
         # x: [batch_size, ...]
         x = jnp.asarray(x, dtype=jnp.uint64)
         while len(x.shape) > 1:
-            accumulator = jnp.zeros(x.shape[:-1])
+            accumulator = jnp.zeros(x.shape[:-1], dtype=jnp.uint64)
             for section in jnp.split(x, x.shape[-1], axis=-1):
-                accumulator *= self.multiplier
-                accumulator += self.increment
-                accumulator += section
+                accumulator *= MULTIPLIER
+                accumulator += INCREMENT
+                accumulator += section.squeeze()
+                accumulator %= MODULUS
             x = accumulator
         # x: [batch_size]
 
-        indices = x >> (63 - self.bits_per_hash)
-        # Get the bit corresponding to the index.
+        indices = x >> (TOP_BIT - self.bits_per_hash)
         byte_indices = indices // 8
         bit_indices = indices % 8
 
@@ -106,7 +110,6 @@ class SimHash(hk.Module):
         # indices: [batch_size]
         indices = jnp.sum(masked_powers, axis=1)
 
-        # Get the bit corresponding to the index.
         byte_indices = indices // 8
         bit_indices = indices % 8
 
