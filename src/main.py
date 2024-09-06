@@ -52,7 +52,7 @@ class Config(pydantic.BaseModel):
     priority_exponent: float = 0.6
     # training
     learning_rate: float = 0.001
-    learning_starts: int = 5e3      # While buffer size < learning_starts, executes random actions
+    learning_starts: int = int(5e3)      # While buffer size < learning_starts, executes random actions
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
