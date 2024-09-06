@@ -484,7 +484,7 @@ def main() -> None:
 
     # Initialize Weights & Biases.
     if config.track:
-        wandb.init(project=config.wandb_project, config=config.model_dump())
+        wandb.init(project=config.wandb_project, config=config.model_dump(), name=config.wandb_run_name)
 
     # Identify devices.
     devices = jax.local_devices()
