@@ -88,8 +88,8 @@ class Context(NamedTuple):
     env: pgx.Env
     devices: list[jax.Device]
     forward: ForwardFn
-    exploration_recurrent_fn: emctx.EpistemicRecurrentFn
-    exploitation_recurrent_fn: emctx.EpistemicRecurrentFn
+    selfplay_recurrent_fn: emctx.EpistemicRecurrentFn
+    reanalyze_recurrent_fn: emctx.EpistemicRecurrentFn
     evaluation_recurrent_fn: emctx.EpistemicRecurrentFn
     optimizer: optax.GradientTransformation
 
@@ -97,12 +97,14 @@ class Context(NamedTuple):
     def __hash__(self):
         return 1
 
+
 class SelfplayOutput(NamedTuple):
     state: pgx.State
     root_value: chex.Array
     root_epistemic_std: chex.Array
     value_prediction: chex.Array
     ube_prediction: chex.Array
+    q_values_epistemic_variance: chex.Array
 
 
 def get_network(env: pgx.Env, config: Config):
@@ -164,6 +166,8 @@ def get_epistemic_recurrent_fn(
             forward.apply(model_params, model_state, state.observation, is_training=False)
         )
         logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
+        # The below does EMCTS for exploration with a uniform prior_policy
+        # logits = jax.lax.cond(exploration, lambda: jnp.zeros_like(exploration_logits), lambda: exploitation_logits)
 
         # Subtract max from logits to improve numerical stability.
         logits = logits - jnp.max(logits, axis=-1, keepdims=True)
@@ -189,7 +193,7 @@ def get_epistemic_recurrent_fn(
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[0, 1])
-def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
+def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -> pgx.State:
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
 
@@ -233,7 +237,7 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             params=model,
             rng_key=key1,
             root=root,
-            recurrent_fn=context.exploration_recurrent_fn,
+            recurrent_fn=context.selfplay_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.qtransform_completed_by_mix_value,
@@ -243,20 +247,19 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
         root_values = search_summary.value
         root_epistemic_stds = search_summary.value_epistemic_std
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, policy_output.action, keys)
-        return next_state, SelfplayOutput(next_state, root_values, root_epistemic_stds, value, value_epistemic_variance)
+        return next_state, SelfplayOutput(state=next_state,
+                                          root_value=root_values,
+                                          root_epistemic_std=root_epistemic_stds,
+                                          value_prediction=value,
+                                          ube_prediction=value_epistemic_variance,
+                                          q_values_epistemic_variance=search_summary.qvalues_epistemic_variance)
 
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, self_play_batch_size)
     starting_states = jax.vmap(context.env.init)(keys)
     key_seq = jax.random.split(rng_key, config.selfplay_steps)
     _, data = jax.lax.scan(step_fn, starting_states, key_seq)
-    (states, sum_root_values, sum_root_epistemic_stds, values, value_epistemic_variances) = data
-    mean_root_values = sum_root_values.mean()
-    mean_root_epistemic_stds = sum_root_epistemic_stds.mean()
-    mean_value = values.mean()
-    mean_value_epistemic_variance = value_epistemic_variances.mean()
-
-    return SelfplayOutput(states, mean_root_values, mean_root_epistemic_stds, mean_value, mean_value_epistemic_variance)
+    return data
 
 
 def mask_invalid_actions(logits: chex.Array, invalid_actions: chex.Array) -> chex.Array:
@@ -313,13 +316,12 @@ def reanalyze(
         params=model,
         rng_key=rng_key,
         root=root,
-        recurrent_fn=context.exploitation_recurrent_fn,
+        recurrent_fn=context.reanalyze_recurrent_fn,
         num_simulations=config.reanalyze_simulations_per_step,
         invalid_actions=invalid_actions,
         qtransform=emctx.qtransform_completed_by_mix_value,
     )
     search_summary = policy_output.search_tree.epistemic_summary()
-
     value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
     ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
 
@@ -329,6 +331,33 @@ def reanalyze(
     exploration_policy_target = jax.nn.softmax(
         completed_qvalues_epistemic_variance * config.exploration_policy_target_temperature
     )
+
+    # ##################
+    # root = emctx.EpistemicRootFnOutput(
+    #     prior_logits=_exploration_logits,  # type: ignore
+    #     value=value,  # type: ignore
+    #     value_epistemic_variance=value_epistemic_variance,  # type: ignore
+    #     embedding=states,  # type: ignore
+    #     beta=jnp.ones_like(value) * config.exploration_beta,  # type: ignore
+    # )
+    # policy_output = emctx.epistemic_gumbel_muzero_policy(
+    #     params=model,
+    #     rng_key=rng_key,
+    #     root=root,
+    #     recurrent_fn=context.selfplay_recurrent_fn,
+    #     num_simulations=config.reanalyze_simulations_per_step,
+    #     invalid_actions=invalid_actions,
+    #     qtransform=emctx.qtransform_completed_by_mix_value,
+    # )
+    # exploratory_search_summary = policy_output.search_tree.epistemic_summary()
+    # ube_target = jnp.max(exploratory_search_summary.qvalues_epistemic_variance, axis=1)
+    # completed_qvalues_epistemic_variance: chex.Array = mask_invalid_actions(
+    #     exploratory_search_summary.qvalues_epistemic_variance, invalid_actions
+    # )
+    # exploration_policy_target = jax.nn.softmax(
+    #     completed_qvalues_epistemic_variance * config.exploration_policy_target_temperature
+    # )
+    # ##################
 
     return ReanalyzeOutput(
         observation=observation,
@@ -383,9 +412,26 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
 
     total_loss = value_loss + ube_loss + exploitation_policy_loss + exploration_policy_loss
 
+    # Log the policies entropies
+    # Compute the probabilities by applying softmax
+    exploitation_probs = jax.nn.softmax(exploitation_logits, axis=-1)
+    # Compute the log-probabilities
+    exploitation_log_probs = jax.nn.log_softmax(exploitation_probs, axis=-1)
+    # Compute entropy: -sum(p * log(p))
+    mean_exploitation_policy_entropy = -jnp.sum(exploitation_probs * exploitation_log_probs, axis=-1).mean()
+
+    # Compute the probabilities by applying softmax
+    exploration_probs = jax.nn.softmax(exploration_logits, axis=-1)
+    # Compute the log-probabilities
+    exploration_log_probs = jax.nn.log_softmax(exploration_logits, axis=-1)
+    # Compute entropy: -sum(p * log(p))
+    mean_exploration_policy_entropy = -jnp.sum(exploration_probs * exploration_log_probs, axis=-1).mean()
+
     return total_loss, (
         model_state,
         absolute_value_error,
+        mean_exploitation_policy_entropy,
+        mean_exploration_policy_entropy,
         value_loss,
         ube_loss,
         exploitation_policy_loss,
@@ -396,15 +442,14 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
 @partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
 def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
     model_params, model_state = model
-    grads, (model_state, absolute_value_error, *losses) = jax.grad(loss_fn, has_aux=True)(
-        model_params, model_state, context, reanalyze_output
-    )
+    grads, (model_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses) \
+        = jax.grad(loss_fn, has_aux=True)(model_params, model_state, context, reanalyze_output)
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = context.optimizer.update(grads, opt_state)
     model_params = optax.apply_updates(model_params, updates)
     model = (model_params, model_state)
 
-    return (model, opt_state, absolute_value_error, *losses)
+    return (model, opt_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses)
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
@@ -460,8 +505,9 @@ def main() -> None:
     if config.debug:
         config.selfplay_batch_size = 32  # FIXME: Return these hyperparameters to normal numbers
         config.selfplay_simulations_per_step = 16
+        config.reanalyze_simulations_per_step = 16
         config.selfplay_steps = 64
-        config.reanalyze_batch_size = 64
+        config.reanalyze_batch_size = 32
         config.max_replay_buffer_length = 100_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 1000
@@ -536,12 +582,12 @@ def main() -> None:
         env=env,
         devices=devices,
         forward=forward,
-        exploration_recurrent_fn=get_epistemic_recurrent_fn(env=env,
+        selfplay_recurrent_fn=get_epistemic_recurrent_fn(env=env,
                                                             forward=forward,
                                                             batch_size=config.selfplay_batch_size,
                                                             exploration=True,
                                                             discount=config.discount),
-        exploitation_recurrent_fn=get_epistemic_recurrent_fn(env=env,
+        reanalyze_recurrent_fn=get_epistemic_recurrent_fn(env=env,
                                                              forward=forward,
                                                              batch_size=config.reanalyze_batch_size,
                                                              exploration=False,
@@ -607,14 +653,15 @@ def main() -> None:
         if frames < config.learning_starts:
             states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            (states, mean_root_value, mean_root_epistemic_std, mean_raw_value, mean_ube) = \
+            (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = \
                 selfplay(model, config, context, jax.random.split(subkey, num_devices))
             log.update(
                 {
-                    "mean_raw_value": mean_raw_value.item(),
-                    "mean_root_value": mean_root_value.item(),
-                    "mean_ube": mean_ube.item(),
-                    "mean_root_epistemic_std": mean_root_epistemic_std.item(),
+                    "mean_raw_value": raw_values.mean().item(),
+                    "mean_root_value": root_values.mean().item(),
+                    "mean_ube": ube_predictions.mean().item(),
+                    "mean_root_epistemic_std": root_epistemic_stds.mean().item(),
+                    "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
                 }
             )
 
@@ -630,6 +677,8 @@ def main() -> None:
         ube_loss_list = []
         exploitation_policy_loss_list = []
         exploration_policy_loss_list = []
+        exploitation_policy_entropy_list = []
+        exploration_policy_entropy_list = []
 
         # If the buffer doesn't have enough interactions yet, keep interacting, or learning shouldn't start yet
         if not buffer_fn.can_sample(buffer_state) or frames < config.learning_starts:
@@ -660,6 +709,8 @@ def main() -> None:
                     model,
                     opt_state,
                     absolute_value_error,
+                    exploitation_policy_entropy,
+                    exploration_policy_entropy,
                     value_loss,
                     ube_loss,
                     exploitation_policy_loss,
@@ -676,24 +727,31 @@ def main() -> None:
                 ube_loss_list.append(ube_loss.mean().item())
                 exploitation_policy_loss_list.append(exploitation_policy_loss.mean().item())
                 exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
-
+                exploitation_policy_entropy_list.append(exploitation_policy_entropy.mean().item())
+                exploration_policy_entropy_list.append(exploration_policy_entropy.mean().item())
                 # TODO: Do we also want to log something per inner loop?
 
             # Calculate average losses for logging.
-            average_value_loss = sum(value_loss_list) / len(value_loss_list)
-            average_ube_loss = sum(ube_loss_list) / len(ube_loss_list)
-            average_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
-            average_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
+            mean_value_loss = sum(value_loss_list) / len(value_loss_list)
+            mean_ube_loss = sum(ube_loss_list) / len(ube_loss_list)
+            mean_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
+            mean_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
+            mean_exploitation_policy_entropy = sum(exploitation_policy_entropy_list) / len(
+                exploitation_policy_entropy_list)
+            mean_exploration_policy_entropy = sum(exploration_policy_entropy_list) / len(
+                exploration_policy_entropy_list)
 
             log.update(
                 {
                     "iteration": iteration,
                     "hours": (time.time() - start_time) / 3600,
                     "frames": frames,
-                    "train/value_loss": average_value_loss,
-                    "train/ube_loss": average_ube_loss,
-                    "train/exploitation_policy_loss": average_exploitation_policy_loss,
-                    "train/exploration_policy_loss": average_exploration_policy_loss,
+                    "train/value_loss": mean_value_loss,
+                    "train/ube_loss": mean_ube_loss,
+                    "train/exploitation_policy_loss": mean_exploitation_policy_loss,
+                    "train/exploration_policy_loss": mean_exploration_policy_loss,
+                    "train/mean_exploitation_policy_entropy": mean_exploitation_policy_entropy,
+                    "train/mean_exploration_policy_entropy": mean_exploration_policy_entropy,
                 }
             )
 
