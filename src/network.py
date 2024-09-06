@@ -140,11 +140,22 @@ class MinatarEpistemicAZNet(hk.Module):
         num_actions,
         num_channels: int = 16,
         hidden_layers_size: int = 64,
-        max_u: int = jnp.iinfo(jnp.int32).max,
+        max_u: int = jnp.inf,
+        max_epistemic_variance_reward: float = 1.0,
+        discount: float = 0.9997,
         hash_class: Type = SimHash,
         hash_args: dict[str, Any] | None = None,
         name="minatar_az_net",
     ):
+        """
+            num_actions = env action space size
+            num_channels = num_channels for the conv2d layer
+            hidden_layers_size = num of units in each hidden layer
+            max_u = if passed, clips the UBE prediction <= max_u. In board games for example, max_u = 1
+            max_epistemic_variance_reward = used to scale the hash to max_reward ** 2 := max V[R]
+            discount = the bellman discount, used to scale the reward uncertainty for novel states
+            hash_class = SimHash or LCGHash
+        """
         super().__init__(name=name)
         self.num_actions = num_actions
         self.num_channels = num_channels
@@ -152,6 +163,8 @@ class MinatarEpistemicAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         self.max_u = max_u
+        self.reward_to_value_epistemic_uncertainty_scale = 1.0 / (1 - discount ** 2)
+        self.max_epistemic_variance_reward = max_epistemic_variance_reward
 
     def __call__(
         self, x, is_training, test_local_stats, update_hash: bool = False
@@ -180,7 +193,7 @@ class MinatarEpistemicAZNet(hk.Module):
         v = hk.Linear(self.hidden_layers_size)(x)
         v = jax.nn.relu(v)
         v = hk.Linear(1)(v)
-        v = jnp.tanh(v)
+        # v = jnp.tanh(v)   # Needed only in zero-sum games, and this is a minatar net
         v = v.reshape((-1,))
 
         # ube head
@@ -190,17 +203,19 @@ class MinatarEpistemicAZNet(hk.Module):
         u = jnp.exp2(u)
         u = u.reshape((-1,))
 
-        if not is_training:
-            u.clip(min=0, max=self.max_u)
-
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        seen = hash_obj(x)
+        reward_epistemic_variance = (~hash_obj(x)) * self.max_epistemic_variance_reward
+
+        if not is_training:
+            # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
+            u = jnp.maximum(reward_epistemic_variance * self.reward_to_value_epistemic_uncertainty_scale, u)
+            u.clip(min=0, max=self.max_u)
 
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, ~seen
+        return main_policy_logits, exploration_policy_logits, v, u, reward_epistemic_variance
 
 
 class FullyConnectedAZNet(hk.Module):

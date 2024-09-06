@@ -39,24 +39,27 @@ class Config(pydantic.BaseModel):
     # Local uncertainty parameters
     hash_class: Type = SimHash
     # selfplay
-    selfplay_batch_size: int = 256  # FIXME: Return these hyperparameters to normal numbers
-    simulations_per_step: int = 64
+    selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
+    selfplay_simulations_per_step: int = 64
     selfplay_steps: int = 256
     # reanalyze
-    reanalyze_batch_size: int = 1024
-    reanalyze_loops_per_selfplay: int = 1
+    reanalyze_batch_size: int = 4096
+    reanalyze_simulations_per_step: int = 32
+    reanalyze_loops_per_selfplay: int = None    # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
+    training_to_interactions_ratio: int = 1   # The number of datapoints to see in training compared to acting
     max_replay_buffer_length: int = 1_000_000
     min_replay_buffer_length: int = 256
     priority_exponent: float = 0.6
     # training
     learning_rate: float = 0.001
-    learning_starts: int = 5e3 # While buffer size < learning_starts, executes random actions
+    learning_starts: int = 5e3      # While buffer size < learning_starts, executes random actions
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
     evaluation_batch: int = 64
     # targets
     exploration_policy_target_temperature: float = 1.0
+    discount: float = 0.997
     # EMCTS exploration parameters
     exploration_beta: pydantic.confloat(ge=0.0) = 0.0   # used in emctx, if > 0 conducts EMCTS exploration.
     exploitation_beta: pydantic.confloat(le=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
@@ -107,6 +110,9 @@ def get_network(env: pgx.Env, config: Config):
         return MinatarEpistemicAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
+            max_u=jnp.iinfo(jnp.int32).max,
+            max_epistemic_variance_reward=1.0,
+            discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
             hash_class=config.hash_class,
         )
@@ -143,10 +149,10 @@ def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
 
 
 def get_epistemic_recurrent_fn(
-    env: pgx.Env, forward: ForwardFn, batch_size: int, exploration: bool
+    env: pgx.Env, forward: ForwardFn, batch_size: int, exploration: bool, discount: float,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
-        model, rng_key: chex.PRNGKey, action: chex.Array, state: pgx.State
+        model, rng_key: chex.PRNGKey, action: chex.Array, state: pgx.State,
     ) -> tuple[emctx.EpistemicRecurrentFnOutput, pgx.State]:
         model_params, model_state = model
 
@@ -166,13 +172,13 @@ def get_epistemic_recurrent_fn(
 
         reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
         value = jnp.where(state.terminated, 0.0, value)
-        discount = -1.0 * jnp.ones_like(value)
-        discount = jnp.where(state.terminated, 0.0, discount)
+        batched_discount = jnp.ones_like(value) * discount     # For two player games -1.0 *
+        batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
             reward_epistemic_variance=reward_epistemic_variance,  # type: ignore
-            discount=discount,  # type: ignore
+            discount=batched_discount,  # type: ignore
             prior_logits=logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
@@ -215,19 +221,20 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
         (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
+
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploration_logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=config.exploration_beta * jnp.ones_like(value),  # type: ignore
+            beta=config.exploration_beta * jnp.linspace(0, 1, num=value.size).reshape(value.shape),  # type: ignore
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,
             rng_key=key1,
             root=root,
             recurrent_fn=context.exploration_recurrent_fn,
-            num_simulations=config.simulations_per_step,
+            num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.qtransform_completed_by_mix_value,
         )
@@ -307,7 +314,7 @@ def reanalyze(
         rng_key=rng_key,
         root=root,
         recurrent_fn=context.exploitation_recurrent_fn,
-        num_simulations=config.simulations_per_step,
+        num_simulations=config.reanalyze_simulations_per_step,
         invalid_actions=invalid_actions,
         qtransform=emctx.qtransform_completed_by_mix_value,
     )
@@ -428,7 +435,7 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
             rng_key=key_for_search,
             root=root,
             recurrent_fn=context.evaluation_recurrent_fn,
-            num_simulations=config.simulations_per_step,
+            num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.qtransform_completed_by_mix_value,
         )
@@ -452,7 +459,7 @@ def main() -> None:
 
     if config.debug:
         config.selfplay_batch_size = 32  # FIXME: Return these hyperparameters to normal numbers
-        config.simulations_per_step = 16
+        config.selfplay_simulations_per_step = 16
         config.selfplay_steps = 64
         config.reanalyze_batch_size = 64
         config.max_replay_buffer_length = 100_000
@@ -462,16 +469,16 @@ def main() -> None:
         config.maximum_number_of_iterations = max(10, int(config.learning_starts /
                                                   (config.selfplay_steps * config.selfplay_batch_size) + 3))
 
+    # Update config with runtime computed values
     if config.auto_seed and config.seed == 0:
         config.seed = random.randint(1, 100000)
-
-    # Make sure min replay buffer length makes sense
-    if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
-        config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
-
     if config.wandb_run_name is None:
         config.wandb_run_name = f"{config.env_id}_beta={config.exploration_beta}_{config.seed}" \
                                 f"_{time.asctime(time.localtime(time.time()))}"
+    config.reanalyze_loops_per_selfplay = int(config.training_to_interactions_ratio * config.selfplay_steps * config.selfplay_batch_size / config.reanalyze_batch_size)
+    # Make sure min replay buffer length makes sense
+    if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
+        config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
 
     print(f"Printing the config:\n{config}", flush=True)
 
@@ -529,9 +536,21 @@ def main() -> None:
         env=env,
         devices=devices,
         forward=forward,
-        exploration_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.selfplay_batch_size, True),
-        exploitation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.reanalyze_batch_size, False),
-        evaluation_recurrent_fn=get_epistemic_recurrent_fn(env, forward, config.num_eval_episodes, False),
+        exploration_recurrent_fn=get_epistemic_recurrent_fn(env=env,
+                                                            forward=forward,
+                                                            batch_size=config.selfplay_batch_size,
+                                                            exploration=True,
+                                                            discount=config.discount),
+        exploitation_recurrent_fn=get_epistemic_recurrent_fn(env=env,
+                                                             forward=forward,
+                                                             batch_size=config.reanalyze_batch_size,
+                                                             exploration=False,
+                                                             discount=config.discount),
+        evaluation_recurrent_fn=get_epistemic_recurrent_fn(env=env,
+                                                           forward=forward,
+                                                           batch_size=config.num_eval_episodes,
+                                                           exploration=False,
+                                                           discount=config.discount),
         optimizer=optimizer,
     )
 

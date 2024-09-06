@@ -8,6 +8,8 @@
 - [~] Network
   - [x] Modify network to have two policy heads (exploration / exploitation)
   - [x] Output reward and value uncertainty (local / UBE)
+  - [x] UBE computed for AZ as max(scaled_reward_unc * geometric_series_coeff, u)
+  - [x] reward uncertainty scaled correctly to scaled_reward_unc
   - [ ] Maybe change to transformer
 - [x] Add states to replay buffer
 - [ ] Reanalyze
@@ -38,12 +40,14 @@
   - [ ] Replay buffer uniqueness
 - [x] Pessimistic execution
 - [x] UBE clipped < max_uncertainty which is a HP and > 0
+- [x] automated beta scheduling
 
 - [ ] Tuning
+- [ ] Add funcitonality to check if game = 2 player, and change the discounto to * -1
 - [ ] Change environment to jax_jit env
 - [ ] Generating data from selfplay?
 
-- [ ] automated beta scheduling
+
 
 
 # Subleq
