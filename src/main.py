@@ -46,7 +46,7 @@ class Config(pydantic.BaseModel):
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
     reanalyze_loops_per_selfplay: int = None    # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
-    training_to_interactions_ratio: int = 1   # The number of datapoints to see in training compared to acting
+    training_to_interactions_ratio: pydantic.conint(ge=2) = 2   # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
     max_replay_buffer_length: int = 1_000_000
     min_replay_buffer_length: int = 256
     priority_exponent: float = 0.6
