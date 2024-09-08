@@ -23,6 +23,7 @@ from hashes import LCGHash, SimHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
 
 ForwardFn = hk.TransformedWithState
+Model = tuple[hk.MutableParams, hk.MutableState]
 
 
 class Config(pydantic.BaseModel):
@@ -171,7 +172,7 @@ def get_epistemic_recurrent_fn(
     discount: float,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
-        model,
+        model: Model,
         rng_key: chex.PRNGKey,
         action: chex.Array,
         state: pgx.State,
@@ -234,7 +235,7 @@ def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
-def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
+def selfplay(model: Model, config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
     model_params, model_state = model
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
@@ -326,7 +327,7 @@ class ReanalyzeOutput(NamedTuple):
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def reanalyze(
-    model,
+    model: Model,
     config: Config,
     context: Context,
     experience_pair: fbx.prioritised_flat_buffer.ExperiencePair,
@@ -477,7 +478,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
 
 
 @partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
-def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
+def train(model: Model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
     model_params, model_state = model
     grads, (model_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses) = (
         jax.grad(loss_fn, has_aux=True)(model_params, model_state, context, reanalyze_output)
@@ -485,13 +486,13 @@ def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput)
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = context.optimizer.update(grads, opt_state)
     model_params = optax.apply_updates(model_params, updates)
-    model = (model_params, model_state)
+    model = (model_params, model_state)  # type: ignore
 
     return (model, opt_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses)
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
-def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
+def evaluate(model: Model, config: Config, context: Context, rng_key: chex.PRNGKey) -> jax.Array:
     model_params, model_state = model
     batch_size = config.num_eval_episodes // len(context.devices)
 
@@ -594,10 +595,10 @@ def main() -> None:
     forward = get_forward_fn(env, config)
     dummy_state = jax.vmap(env.init)(jax.random.split(subkey_for_dummy_state, 2))
     dummy_input = dummy_state.observation
-    model = forward.init(subkey_for_init, dummy_input)
+    model: tuple[hk.MutableParams, hk.MutableState] = forward.init(subkey_for_init, dummy_input)
     # Initialize optimizer.
     optimizer = optax.adam(learning_rate=config.learning_rate)
-    opt_state = optimizer.init(params=model[0])
+    opt_state: optax.OptState = optimizer.init(params=model[0])
     # Replicate to all devices.
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)
 
