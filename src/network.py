@@ -163,8 +163,8 @@ class MinatarEpistemicAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         self.max_u = max_u
-        self.reward_to_value_epistemic_uncertainty_scale = 1.0 / (1 - discount ** 2)
-        self.max_epistemic_variance_reward = max_epistemic_variance_reward
+        self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount ** 2)
+        self.max_reward_epistemic_variance = max_epistemic_variance_reward
 
     def __call__(
         self, x, is_training, test_local_stats, update_hash: bool = False
@@ -205,17 +205,17 @@ class MinatarEpistemicAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        reward_epistemic_variance = (~hash_obj(x)) * self.max_epistemic_variance_reward
+        scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
-            u = jnp.maximum(reward_epistemic_variance * self.reward_to_value_epistemic_uncertainty_scale, u)
+            u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
             u.clip(min=0, max=self.max_u)
 
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, reward_epistemic_variance
+        return main_policy_logits, exploration_policy_logits, v, u, jnp.zeros_like(v)
 
 
 class FullyConnectedAZNet(hk.Module):

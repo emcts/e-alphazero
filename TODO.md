@@ -41,13 +41,18 @@
 - [x] Pessimistic execution
 - [x] UBE clipped < max_uncertainty which is a HP and > 0
 - [x] automated beta scheduling
+- [x] EpistemicQ transform instead of Q transform
+- [x] Func. to choose between exploration / exploitation logits in selfplay
+- [x] Correct ube / reward uncertainty computations
+- [] Hp for sampling actions from root / using selected action det.
 
+- [] Count number of hashed states
+- [] Selfplay continuous from where it left off at the last iteration.
+- [] Train / interact ratio >= 2
+- [] Verify root-std behavior.
 - [ ] Tuning
 - [ ] Add funcitonality to check if game = 2 player, and change the discounto to * -1
 - [ ] Change environment to jax_jit env
-- [ ] Generating data from selfplay?
-
-
 
 
 # Subleq
