@@ -44,7 +44,8 @@
 - [x] EpistemicQ transform instead of Q transform
 - [x] Func. to choose between exploration / exploitation logits in selfplay
 - [x] Correct ube / reward uncertainty computations
-- [] Hp for sampling actions from root / using selected action det.
+- [x] HP for sampling actions from root / using selected action det.
+- [x] HP for sampling actions from improved policy instead of visit counts
 
 - [] Count number of hashed states
 - [] Selfplay continuous from where it left off at the last iteration.

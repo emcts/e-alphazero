@@ -43,6 +43,8 @@ class Config(pydantic.BaseModel):
     selfplay_simulations_per_step: int = 64
     selfplay_steps: int = 256
     directed_exploration: bool = False
+    sample_actions: bool = True
+    sample_from_improved_policy: bool = False
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
@@ -221,7 +223,7 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
     num_actions = context.env.num_actions
 
     def step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
-        key1, key2 = jax.random.split(key)
+        key1, key2, key3, key4 = jax.random.split(key, num=4)
 
         (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
@@ -247,7 +249,18 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
         search_summary = policy_output.search_tree.epistemic_summary()
         root_values = search_summary.value
         root_epistemic_stds = search_summary.value_epistemic_std
-        next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, policy_output.action, keys)
+        # Note: for GumbelMZ this is essentially det. argmax, while for MZ (PUCT) this is sampled from counts.
+        action_chosen_by_search_tree = policy_output.action
+        # Sample from visits
+        sampled_action = jax.random.categorical(key3, search_summary.visit_probs, axis=-1)
+        # Sample from improved policy
+        sampled_action_from_improved_policy = jax.random.categorical(key4, policy_output.action_weights, axis=-1)
+        chex.assert_equal_shape([action_chosen_by_search_tree, sampled_action, sampled_action_from_improved_policy])
+        chosen_action = jax.lax.cond(config.sample_actions, lambda: sampled_action,
+                                     lambda: action_chosen_by_search_tree)
+        chosen_action = jax.lax.cond(config.sample_from_improved_policy, lambda: sampled_action_from_improved_policy,
+                                     lambda: chosen_action)
+        next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, chosen_action, keys)
         return next_state, SelfplayOutput(state=next_state,
                                           root_value=root_values,
                                           root_epistemic_std=root_epistemic_stds,
