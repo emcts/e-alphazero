@@ -46,11 +46,12 @@
 - [x] Correct ube / reward uncertainty computations
 - [x] HP for sampling actions from root / using selected action det.
 - [x] HP for sampling actions from improved policy instead of visit counts
-
-- [] Count number of hashed states
-- [] Selfplay continuous from where it left off at the last iteration.
-- [] Train / interact ratio >= 2
-- [] Verify root-std behavior.
+- [x] Train / interact ratio >= 2
+- [x] HP to choose whether to rescale the qs 0-1 or not, for gumbel search
+- 
+- [ ] Count number of hashed states
+- [ ] Selfplay continuous from where it left off at the last iteration.
+- [ ] Verify root-std behavior.
 - [ ] Tuning
 - [ ] Add funcitonality to check if game = 2 player, and change the discounto to * -1
 - [ ] Change environment to jax_jit env

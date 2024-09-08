@@ -45,6 +45,7 @@ class Config(pydantic.BaseModel):
     directed_exploration: bool = False
     sample_actions: bool = True
     sample_from_improved_policy: bool = False
+    rescale_q_values_in_search: bool = True
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
@@ -243,7 +244,8 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             recurrent_fn=context.selfplay_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
+            qtransform=partial(emctx.qtransform_completed_by_mix_value,
+                               rescale_values=config.rescale_q_values_in_search),
         )
         keys = jax.random.split(key2, self_play_batch_size)
         search_summary = policy_output.search_tree.epistemic_summary()
