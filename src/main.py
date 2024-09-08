@@ -42,6 +42,7 @@ class Config(pydantic.BaseModel):
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
     selfplay_steps: int = 256
+    directed_exploration: bool = False
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
@@ -585,7 +586,7 @@ def main() -> None:
         selfplay_recurrent_fn=get_epistemic_recurrent_fn(env=env,
                                                             forward=forward,
                                                             batch_size=config.selfplay_batch_size,
-                                                            exploration=True,
+                                                            exploration=config.directed_exploration,
                                                             discount=config.discount),
         reanalyze_recurrent_fn=get_epistemic_recurrent_fn(env=env,
                                                              forward=forward,
