@@ -622,6 +622,7 @@ def main() -> None:
     iteration: int = 0
     hours: float = 0.0
     frames: int = 0
+    set_bits: int = 0
     log: dict[str, Any] = {"iteration": iteration, "hours": hours, "frames": frames}
     start_time = time.time()
 
@@ -714,8 +715,8 @@ def main() -> None:
                     "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
                 }
             )
-
-        frames += config.selfplay_batch_size * config.selfplay_steps
+        frame_diff = config.selfplay_batch_size * config.selfplay_steps
+        frames += frame_diff
 
         # Add to buffer.
         # TODO: Check truncation (?)
@@ -793,6 +794,14 @@ def main() -> None:
                 exploration_policy_entropy_list
             )
 
+            # Calculate "replay buffer uniqueness" (according to hash set).
+            _model_params, model_state = model
+            # FIXME: Currently uses hardcoded network name and module name.
+            binary_set = model_state["minatar_az_net/sim_hash"]["binary_set"][0]  # index 0 because of device dimension
+            new_set_bits = jax.lax.population_count(binary_set).sum().item()  # i.e. "seen" states
+            set_bit_diff = new_set_bits - set_bits
+            set_bits = new_set_bits
+
             log.update(
                 {
                     "iteration": iteration,
@@ -804,6 +813,8 @@ def main() -> None:
                     "train/exploration_policy_loss": mean_exploration_policy_loss,
                     "train/mean_exploitation_policy_entropy": mean_exploitation_policy_entropy,
                     "train/mean_exploration_policy_entropy": mean_exploration_policy_entropy,
+                    "hash/set_bits": set_bits,
+                    "hash/new_bits_ratio": set_bit_diff / frame_diff,
                 }
             )
 
