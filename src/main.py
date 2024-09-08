@@ -607,7 +607,7 @@ def main() -> None:
         min_length=max(config.min_replay_buffer_length, config.reanalyze_batch_size),
         sample_batch_size=config.reanalyze_batch_size,
         add_sequences=True,
-        add_batch_size=num_devices * config.selfplay_batch_size,
+        add_batch_size=config.selfplay_batch_size,
         priority_exponent=config.priority_exponent,
     )
     buffer_state = buffer_fn.init(jax.tree.map(lambda x: x[0], dummy_state))
@@ -714,7 +714,7 @@ def main() -> None:
                 }
             )
 
-        frames += num_devices * config.selfplay_batch_size * config.selfplay_steps
+        frames += config.selfplay_batch_size * config.selfplay_steps
 
         # Add to buffer.
         # TODO: Check truncation (?)
