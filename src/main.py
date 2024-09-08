@@ -262,7 +262,7 @@ def selfplay(model: Model, config: Config, context: Context, rng_key: chex.PRNGK
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=partial(
-                emctx.qtransform_completed_by_mix_value, rescale_values=config.rescale_q_values_in_search
+                emctx.epistemic_qtransform_completed_by_mix_value, rescale_values=config.rescale_q_values_in_search
             ),
         )
         keys = jax.random.split(key2, self_play_batch_size)
