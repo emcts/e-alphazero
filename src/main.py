@@ -653,7 +653,7 @@ def main() -> None:
         print(log)
         if config.track:
             wandb.log(log)
-        log = {"iteration": iteration}
+        log = {}
 
         if iteration % config.eval_interval == 0:
             # Evaluate network.
