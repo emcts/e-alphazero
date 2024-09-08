@@ -240,7 +240,7 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             recurrent_fn=context.selfplay_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=emctx.qtransform_completed_by_mix_value,
+            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
         )
         keys = jax.random.split(key2, self_play_batch_size)
         search_summary = policy_output.search_tree.epistemic_summary()
@@ -319,7 +319,7 @@ def reanalyze(
         recurrent_fn=context.reanalyze_recurrent_fn,
         num_simulations=config.reanalyze_simulations_per_step,
         invalid_actions=invalid_actions,
-        qtransform=emctx.qtransform_completed_by_mix_value,
+        qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
     )
     search_summary = policy_output.search_tree.epistemic_summary()
     value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
@@ -347,7 +347,7 @@ def reanalyze(
     #     recurrent_fn=context.selfplay_recurrent_fn,
     #     num_simulations=config.reanalyze_simulations_per_step,
     #     invalid_actions=invalid_actions,
-    #     qtransform=emctx.qtransform_completed_by_mix_value,
+    #     qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
     # )
     # exploratory_search_summary = policy_output.search_tree.epistemic_summary()
     # ube_target = jnp.max(exploratory_search_summary.qvalues_epistemic_variance, axis=1)
@@ -482,7 +482,7 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
             recurrent_fn=context.evaluation_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=emctx.qtransform_completed_by_mix_value,
+            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
         )
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
