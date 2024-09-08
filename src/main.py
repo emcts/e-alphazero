@@ -4,7 +4,7 @@ import datetime
 import time
 import os
 import pickle
-from typing import NamedTuple, Type, Any
+from typing import Annotated, NamedTuple, Type, Any
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -50,10 +50,10 @@ class Config(pydantic.BaseModel):
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
-    reanalyze_loops_per_selfplay: int = (
+    reanalyze_loops_per_selfplay: int | None = (
         None  # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
     )
-    training_to_interactions_ratio: pydantic.conint(ge=2) = (
+    training_to_interactions_ratio: Annotated[int, pydantic.Field(strict=True, ge=2)] = (
         2  # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
     )
     max_replay_buffer_length: int = 1_000_000
@@ -70,15 +70,19 @@ class Config(pydantic.BaseModel):
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
     # EMCTS exploration parameters
-    exploration_beta: pydantic.confloat(ge=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
-    exploitation_beta: pydantic.confloat(le=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
+    exploration_beta: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
+        0.0  # used in emctx, if > 0 conducts EMCTS exploration.
+    )
+    exploitation_beta: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
+        0.0  # used in emctx, if > 0 conducts EMCTS exploration.
+    )
     beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
     num_eval_episodes: int = 32
     # wandb params
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
     wandb_project: str = "e-alphazero"
-    wandb_run_name: str = None
+    wandb_run_name: str | None = None
 
     class Config:
         extra = "forbid"
@@ -352,7 +356,7 @@ def reanalyze(
         recurrent_fn=context.reanalyze_recurrent_fn,
         num_simulations=config.reanalyze_simulations_per_step,
         invalid_actions=invalid_actions,
-        qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
+        qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore  # TODO: Fix the type in emctx
     )
     search_summary = policy_output.search_tree.epistemic_summary()
     value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
@@ -516,7 +520,7 @@ def evaluate(model, config: Config, context: Context, rng_key: chex.PRNGKey):
             recurrent_fn=context.evaluation_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,
+            qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
         )
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
@@ -617,7 +621,7 @@ def main() -> None:
     iteration: int = 0
     hours: float = 0.0
     frames: int = 0
-    log = {"iteration": iteration, "hours": hours, "frames": frames}
+    log: dict[str, Any] = {"iteration": iteration, "hours": hours, "frames": frames}
     start_time = time.time()
 
     context = Context(

@@ -140,7 +140,7 @@ class MinatarEpistemicAZNet(hk.Module):
         num_actions,
         num_channels: int = 16,
         hidden_layers_size: int = 64,
-        max_u: int = jnp.inf,
+        max_u: float = jnp.inf,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
