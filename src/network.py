@@ -148,13 +148,13 @@ class MinatarEpistemicAZNet(hk.Module):
         name="minatar_az_net",
     ):
         """
-            num_actions = env action space size
-            num_channels = num_channels for the conv2d layer
-            hidden_layers_size = num of units in each hidden layer
-            max_u = if passed, clips the UBE prediction <= max_u. In board games for example, max_u = 1
-            max_epistemic_variance_reward = used to scale the hash to max_reward ** 2 := max V[R]
-            discount = the bellman discount, used to scale the reward uncertainty for novel states
-            hash_class = SimHash or LCGHash
+        num_actions = env action space size
+        num_channels = num_channels for the conv2d layer
+        hidden_layers_size = num of units in each hidden layer
+        max_u = if passed, clips the UBE prediction <= max_u. In board games for example, max_u = 1
+        max_epistemic_variance_reward = used to scale the hash to max_reward ** 2 := max V[R]
+        discount = the bellman discount, used to scale the reward uncertainty for novel states
+        hash_class = SimHash or LCGHash
         """
         super().__init__(name=name)
         self.num_actions = num_actions
@@ -163,7 +163,7 @@ class MinatarEpistemicAZNet(hk.Module):
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
         self.max_u = max_u
-        self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount ** 2)
+        self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
 
     def __call__(

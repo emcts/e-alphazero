@@ -24,11 +24,12 @@ from network import EpistemicAZNet, MinatarEpistemicAZNet
 
 ForwardFn = hk.TransformedWithState
 
+
 class Config(pydantic.BaseModel):
     """Hyperparameter configuration"""
 
     # general
-    debug: bool = False     # If True, automatically loads much smaller hps to make debugging easier
+    debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
     auto_seed: bool = True  # If True and seed == 0, seeds with a random seed
     seed: int = 0
     env_id: pgx.EnvId = "minatar-breakout"
@@ -49,14 +50,18 @@ class Config(pydantic.BaseModel):
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
-    reanalyze_loops_per_selfplay: int = None    # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
-    training_to_interactions_ratio: pydantic.conint(ge=2) = 2   # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
+    reanalyze_loops_per_selfplay: int = (
+        None  # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
+    )
+    training_to_interactions_ratio: pydantic.conint(ge=2) = (
+        2  # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
+    )
     max_replay_buffer_length: int = 1_000_000
     min_replay_buffer_length: int = 256
     priority_exponent: float = 0.6
     # training
     learning_rate: float = 0.001
-    learning_starts: int = int(5e3)      # While buffer size < learning_starts, executes random actions
+    learning_starts: int = int(5e3)  # While buffer size < learning_starts, executes random actions
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
@@ -65,9 +70,9 @@ class Config(pydantic.BaseModel):
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
     # EMCTS exploration parameters
-    exploration_beta: pydantic.confloat(ge=0.0) = 0.0   # used in emctx, if > 0 conducts EMCTS exploration.
+    exploration_beta: pydantic.confloat(ge=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
     exploitation_beta: pydantic.confloat(le=0.0) = 0.0  # used in emctx, if > 0 conducts EMCTS exploration.
-    beta_schedule: bool = False     # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
+    beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
     num_eval_episodes: int = 32
     # wandb params
@@ -155,10 +160,17 @@ def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
 
 
 def get_epistemic_recurrent_fn(
-    env: pgx.Env, forward: ForwardFn, batch_size: int, exploration: bool, discount: float,
+    env: pgx.Env,
+    forward: ForwardFn,
+    batch_size: int,
+    exploration: bool,
+    discount: float,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
-        model, rng_key: chex.PRNGKey, action: chex.Array, state: pgx.State,
+        model,
+        rng_key: chex.PRNGKey,
+        action: chex.Array,
+        state: pgx.State,
     ) -> tuple[emctx.EpistemicRecurrentFnOutput, pgx.State]:
         model_params, model_state = model
 
@@ -180,7 +192,7 @@ def get_epistemic_recurrent_fn(
 
         reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
         value = jnp.where(state.terminated, 0.0, value)
-        batched_discount = jnp.ones_like(value) * discount     # For two player games -1.0 *
+        batched_discount = jnp.ones_like(value) * discount  # For two player games -1.0 *
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
@@ -244,8 +256,9 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
             recurrent_fn=context.selfplay_recurrent_fn,
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
-            qtransform=partial(emctx.qtransform_completed_by_mix_value,
-                               rescale_values=config.rescale_q_values_in_search),
+            qtransform=partial(
+                emctx.qtransform_completed_by_mix_value, rescale_values=config.rescale_q_values_in_search
+            ),
         )
         keys = jax.random.split(key2, self_play_batch_size)
         search_summary = policy_output.search_tree.epistemic_summary()
@@ -258,17 +271,21 @@ def selfplay(model, config: Config, context: Context, rng_key: chex.PRNGKey) -> 
         # Sample from improved policy
         sampled_action_from_improved_policy = jax.random.categorical(key4, policy_output.action_weights, axis=-1)
         chex.assert_equal_shape([action_chosen_by_search_tree, sampled_action, sampled_action_from_improved_policy])
-        chosen_action = jax.lax.cond(config.sample_actions, lambda: sampled_action,
-                                     lambda: action_chosen_by_search_tree)
-        chosen_action = jax.lax.cond(config.sample_from_improved_policy, lambda: sampled_action_from_improved_policy,
-                                     lambda: chosen_action)
+        chosen_action = jax.lax.cond(
+            config.sample_actions, lambda: sampled_action, lambda: action_chosen_by_search_tree
+        )
+        chosen_action = jax.lax.cond(
+            config.sample_from_improved_policy, lambda: sampled_action_from_improved_policy, lambda: chosen_action
+        )
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, chosen_action, keys)
-        return next_state, SelfplayOutput(state=next_state,
-                                          root_value=root_values,
-                                          root_epistemic_std=root_epistemic_stds,
-                                          value_prediction=value,
-                                          ube_prediction=value_epistemic_variance,
-                                          q_values_epistemic_variance=search_summary.qvalues_epistemic_variance)
+        return next_state, SelfplayOutput(
+            state=next_state,
+            root_value=root_values,
+            root_epistemic_std=root_epistemic_stds,
+            value_prediction=value,
+            ube_prediction=value_epistemic_variance,
+            q_values_epistemic_variance=search_summary.qvalues_epistemic_variance,
+        )
 
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, self_play_batch_size)
@@ -458,8 +475,9 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
 @partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
 def train(model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
     model_params, model_state = model
-    grads, (model_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses) \
-        = jax.grad(loss_fn, has_aux=True)(model_params, model_state, context, reanalyze_output)
+    grads, (model_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses) = (
+        jax.grad(loss_fn, has_aux=True)(model_params, model_state, context, reanalyze_output)
+    )
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = context.optimizer.update(grads, opt_state)
     model_params = optax.apply_updates(model_params, updates)
@@ -528,16 +546,24 @@ def main() -> None:
         config.min_replay_buffer_length = 64
         config.learning_starts = 1000
         config.track = False
-        config.maximum_number_of_iterations = max(10, int(config.learning_starts /
-                                                  (config.selfplay_steps * config.selfplay_batch_size) + 3))
+        config.maximum_number_of_iterations = max(
+            10, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
+        )
 
     # Update config with runtime computed values
     if config.auto_seed and config.seed == 0:
         config.seed = random.randint(1, 100000)
     if config.wandb_run_name is None:
-        config.wandb_run_name = f"{config.env_id}_beta={config.exploration_beta}_{config.seed}" \
-                                f"_{time.asctime(time.localtime(time.time()))}"
-    config.reanalyze_loops_per_selfplay = int(config.training_to_interactions_ratio * config.selfplay_steps * config.selfplay_batch_size / config.reanalyze_batch_size)
+        config.wandb_run_name = (
+            f"{config.env_id}_beta={config.exploration_beta}_{config.seed}"
+            f"_{time.asctime(time.localtime(time.time()))}"
+        )
+    config.reanalyze_loops_per_selfplay = int(
+        config.training_to_interactions_ratio
+        * config.selfplay_steps
+        * config.selfplay_batch_size
+        / config.reanalyze_batch_size
+    )
     # Make sure min replay buffer length makes sense
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
@@ -598,21 +624,23 @@ def main() -> None:
         env=env,
         devices=devices,
         forward=forward,
-        selfplay_recurrent_fn=get_epistemic_recurrent_fn(env=env,
-                                                            forward=forward,
-                                                            batch_size=config.selfplay_batch_size,
-                                                            exploration=config.directed_exploration,
-                                                            discount=config.discount),
-        reanalyze_recurrent_fn=get_epistemic_recurrent_fn(env=env,
-                                                             forward=forward,
-                                                             batch_size=config.reanalyze_batch_size,
-                                                             exploration=False,
-                                                             discount=config.discount),
-        evaluation_recurrent_fn=get_epistemic_recurrent_fn(env=env,
-                                                           forward=forward,
-                                                           batch_size=config.num_eval_episodes,
-                                                           exploration=False,
-                                                           discount=config.discount),
+        selfplay_recurrent_fn=get_epistemic_recurrent_fn(
+            env=env,
+            forward=forward,
+            batch_size=config.selfplay_batch_size,
+            exploration=config.directed_exploration,
+            discount=config.discount,
+        ),
+        reanalyze_recurrent_fn=get_epistemic_recurrent_fn(
+            env=env,
+            forward=forward,
+            batch_size=config.reanalyze_batch_size,
+            exploration=False,
+            discount=config.discount,
+        ),
+        evaluation_recurrent_fn=get_epistemic_recurrent_fn(
+            env=env, forward=forward, batch_size=config.num_eval_episodes, exploration=False, discount=config.discount
+        ),
         optimizer=optimizer,
     )
 
@@ -669,8 +697,9 @@ def main() -> None:
         if frames < config.learning_starts:
             states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = \
-                selfplay(model, config, context, jax.random.split(subkey, num_devices))
+            (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = selfplay(
+                model, config, context, jax.random.split(subkey, num_devices)
+            )
             log.update(
                 {
                     "mean_raw_value": raw_values.mean().item(),
@@ -753,9 +782,11 @@ def main() -> None:
             mean_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
             mean_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
             mean_exploitation_policy_entropy = sum(exploitation_policy_entropy_list) / len(
-                exploitation_policy_entropy_list)
+                exploitation_policy_entropy_list
+            )
             mean_exploration_policy_entropy = sum(exploration_policy_entropy_list) / len(
-                exploration_policy_entropy_list)
+                exploration_policy_entropy_list
+            )
 
             log.update(
                 {
