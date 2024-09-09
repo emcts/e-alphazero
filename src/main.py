@@ -197,6 +197,7 @@ def get_epistemic_recurrent_fn(
 
         reward = state.rewards[jnp.arange(state.rewards.shape[0]), current_player]
         value = jnp.where(state.terminated, 0.0, value)
+        value_epistemic_variance = jnp.where(state.terminated, 0.0, value_epistemic_variance)
         batched_discount = jnp.ones_like(value) * discount  # For two player games -1.0 *
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
@@ -246,13 +247,14 @@ def selfplay(model: Model, config: Config, context: Context, rng_key: chex.PRNGK
         (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
+        selfplay_beta = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta, lambda: 0.0)
 
         root = emctx.EpistemicRootFnOutput(
             prior_logits=exploration_logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
-            beta=config.exploration_beta * jnp.linspace(0, 1, num=value.size).reshape(value.shape),  # type: ignore
+            beta=selfplay_beta * jnp.linspace(0, 1, num=value.size).reshape(value.shape),  # type: ignore
         )
         policy_output = emctx.epistemic_gumbel_muzero_policy(
             params=model,
