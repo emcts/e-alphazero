@@ -33,8 +33,10 @@ class Config(pydantic.BaseModel):
     debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
     auto_seed: bool = True  # If True and seed == 0, seeds with a random seed
     seed: int = 0
+    env_class: str = "pgx"
     env_id: pgx.EnvId = "minatar-breakout"
     maximum_number_of_iterations: int = 2000
+    two_players_game: bool = False
     # network
     linear_layer_size: int = 128
     num_channels: int = 16
@@ -170,6 +172,7 @@ def get_epistemic_recurrent_fn(
     batch_size: int,
     exploration: bool,
     discount: float,
+    two_players_game: bool,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
         model: Model,
@@ -199,6 +202,7 @@ def get_epistemic_recurrent_fn(
         value = jnp.where(state.terminated, 0.0, value)
         value_epistemic_variance = jnp.where(state.terminated, 0.0, value_epistemic_variance)
         batched_discount = jnp.ones_like(value) * discount  # For two player games -1.0 *
+        batched_discount = jax.lax.cond(two_players_game, lambda: batched_discount * -1.0, lambda: batched_discount)
         batched_discount = jnp.where(state.terminated, 0.0, batched_discount)
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
@@ -215,7 +219,7 @@ def get_epistemic_recurrent_fn(
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[0, 1])
-def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -> pgx.State:
+def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -> tuple[pgx.State, pgx.State]:
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
 
@@ -230,13 +234,13 @@ def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -
     keys = jax.random.split(sub_key, self_play_batch_size)
     states = jax.vmap(context.env.init)(keys)
     key_seq = jax.random.split(rng_key, config.selfplay_steps)
-    _, states = jax.lax.scan(pre_training_step_fn, states, key_seq)
+    last_states, states = jax.lax.scan(pre_training_step_fn, states, key_seq)
 
-    return states
+    return last_states, states
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
-def selfplay(model: Model, config: Config, context: Context, rng_key: chex.PRNGKey) -> SelfplayOutput:
+def selfplay(model: Model, config: Config, context: Context, last_states: pgx.State, rng_key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
     model_params, model_state = model
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
@@ -295,11 +299,10 @@ def selfplay(model: Model, config: Config, context: Context, rng_key: chex.PRNGK
         )
 
     rng_key, sub_key = jax.random.split(rng_key)
-    keys = jax.random.split(sub_key, self_play_batch_size)
-    starting_states = jax.vmap(context.env.init)(keys)
+    starting_states = last_states
     key_seq = jax.random.split(rng_key, config.selfplay_steps)
-    _, data = jax.lax.scan(step_fn, starting_states, key_seq)
-    return data
+    last_states, data = jax.lax.scan(step_fn, starting_states, key_seq)
+    return last_states, data
 
 
 def mask_invalid_actions(logits: chex.Array, invalid_actions: chex.Array) -> chex.Array:
@@ -366,8 +369,15 @@ def reanalyze(
     ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
 
     completed_qvalues_epistemic_variance: chex.Array = mask_invalid_actions(
-        search_summary.qvalues_epistemic_variance, invalid_actions
+        jax.vmap(complete_qs)(
+            search_summary.qvalues_epistemic_variance,
+            search_summary.visit_counts,
+            search_summary.value_epistemic_std ** 2),
+        invalid_actions
     )
+    # completed_qvalues_epistemic_variance: chex.Array =
+    #     search_summary.qvalues_epistemic_variance, invalid_actions
+    # )
     exploration_policy_target = jax.nn.softmax(
         completed_qvalues_epistemic_variance * config.exploration_policy_target_temperature
     )
@@ -407,6 +417,20 @@ def reanalyze(
         exploitation_policy_target=policy_output.action_weights,
         exploration_policy_target=exploration_policy_target,
     )
+
+
+def complete_qs(qvalues, visit_counts, value):
+    """Returns completed Q-values (or Q-value uncertainty), with the `value` for unvisited actions."""
+    chex.assert_equal_shape([qvalues, visit_counts])
+    chex.assert_shape(value, [])
+
+    # The missing qvalues are replaced by the value.
+    completed_qvalues = jnp.where(
+        visit_counts > 0,
+        qvalues,
+        value)
+    chex.assert_equal_shape([completed_qvalues, qvalues])
+    return completed_qvalues
 
 
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
@@ -571,6 +595,7 @@ def main() -> None:
         * config.selfplay_batch_size
         / config.reanalyze_batch_size
     )
+    config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     # Make sure min replay buffer length makes sense
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
@@ -626,6 +651,7 @@ def main() -> None:
     frames: int = 0
     set_bits: int = 0
     log: dict[str, Any] = {"iteration": iteration, "hours": hours, "frames": frames}
+    last_states = None
     start_time = time.time()
 
     context = Context(
@@ -638,6 +664,7 @@ def main() -> None:
             batch_size=config.selfplay_batch_size,
             exploration=config.directed_exploration,
             discount=config.discount,
+            two_players_game=config.two_players_game
         ),
         reanalyze_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -645,9 +672,15 @@ def main() -> None:
             batch_size=config.reanalyze_batch_size,
             exploration=False,
             discount=config.discount,
+            two_players_game=config.two_players_game
         ),
         evaluation_recurrent_fn=get_epistemic_recurrent_fn(
-            env=env, forward=forward, batch_size=config.num_eval_episodes, exploration=False, discount=config.discount
+            env=env,
+            forward=forward,
+            batch_size=config.num_eval_episodes,
+            exploration=False,
+            discount=config.discount,
+            two_players_game=config.two_players_game
         ),
         optimizer=optimizer,
     )
@@ -703,10 +736,10 @@ def main() -> None:
         # Selfplay.
         rng_key, subkey = jax.random.split(rng_key)
         if frames < config.learning_starts:
-            states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
+            last_states, states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = selfplay(
-                model, config, context, jax.random.split(subkey, num_devices)
+            last_states, (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = selfplay(
+                model, config, context, last_states, jax.random.split(subkey, num_devices)
             )
             log.update(
                 {
