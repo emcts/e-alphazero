@@ -185,7 +185,8 @@ class MinatarEpistemicAZNet(hk.Module):
         main_policy_logits = hk.Linear(self.num_actions)(main_policy_logits)
 
         # exploration policy head
-        exploration_policy_logits = hk.Linear(self.hidden_layers_size)(x)
+        exploration_policy_logits = jax.lax.stop_gradient(x)
+        exploration_policy_logits = hk.Linear(self.hidden_layers_size)(exploration_policy_logits)
         exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
         exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)
 
@@ -197,7 +198,8 @@ class MinatarEpistemicAZNet(hk.Module):
         v = v.reshape((-1,))
 
         # ube head
-        u = hk.Linear(self.hidden_layers_size)(x)
+        u = jax.lax.stop_gradient(x)
+        u = hk.Linear(self.hidden_layers_size)(u)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
         u = jnp.exp2(u)
