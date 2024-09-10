@@ -21,6 +21,8 @@ import sys
 from pgx.experimental import auto_reset  # type: ignore
 from hashes import LCGHash, SimHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
+# import wrappers
+import jit_env
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
@@ -47,7 +49,7 @@ class Config(pydantic.BaseModel):
     selfplay_simulations_per_step: int = 64
     selfplay_steps: int = 256
     directed_exploration: bool = False
-    sample_actions: bool = True
+    sample_actions: bool = False
     sample_from_improved_policy: bool = False
     rescale_q_values_in_search: bool = True
     # reanalyze
@@ -65,6 +67,7 @@ class Config(pydantic.BaseModel):
     # training
     learning_rate: float = 0.001
     learning_starts: int = int(5e3)  # While buffer size < learning_starts, executes random actions
+    scale_uncertainty_losses: float = 0.01    # Scales the exploration policy and ube head to reduce influence on body
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
@@ -108,6 +111,8 @@ class Context(NamedTuple):
     reanalyze_recurrent_fn: emctx.EpistemicRecurrentFn
     evaluation_recurrent_fn: emctx.EpistemicRecurrentFn
     optimizer: optax.GradientTransformation
+    scale_uncertainty_losses: float
+
 
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):
@@ -122,6 +127,25 @@ class SelfplayOutput(NamedTuple):
     ube_prediction: chex.Array
     q_values_epistemic_variance: chex.Array
 
+
+def make_envs(env_class: str, env_id: str, truncation_length: int):
+    selfplay_env, planner_env, eval_env = None, None, None
+    match env_class:
+        case "pgx":
+            selfplay_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+            planner_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+            eval_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+        case "jumanji":
+            raise NotImplementedError(f"jumanji is not yet implemented")
+        case "brax":
+            raise NotImplementedError(f"brax is not yet implemented")
+
+    selfplay_env = jit_env.wrappers.AutoReset(wrappers.TimeoutWrapper(selfplay_env, truncation_length, terminate_on_timeout=False))
+    planner_env = wrappers.TimeoutWrapper(planner_env, int(1e9), False)
+
+    selfplay_env = wrappers.AddObservationToState(selfplay_env)
+    planner_env = wrappers.AddObservationToState(planner_env)
+    return selfplay_env, planner_env, eval_env
 
 def get_network(env: pgx.Env, config: Config):
     if "minatar" in config.env_id:
@@ -474,7 +498,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     )
     exploration_policy_loss = jnp.mean(exploration_policy_loss)
 
-    total_loss = value_loss + ube_loss + exploitation_policy_loss + exploration_policy_loss
+    total_loss = value_loss + exploitation_policy_loss + (exploration_policy_loss + ube_loss) * context.scale_uncertainty_losses
 
     # Log the policies entropies
     # Compute the probabilities by applying softmax
@@ -612,6 +636,7 @@ def main() -> None:
 
     # Make the environment.
     env = pgx.make(config.env_id)
+    # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)
     # baseline = pgx.make_baseline_model(config.env_id + "_v0")  # type: ignore
 
     # Initialize RNG key.
@@ -683,6 +708,7 @@ def main() -> None:
             two_players_game=config.two_players_game
         ),
         optimizer=optimizer,
+        scale_uncertainty_losses=config.scale_uncertainty_losses
     )
 
     # Training loop

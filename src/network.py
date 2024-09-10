@@ -48,6 +48,9 @@ class EpistemicAZNet(hk.Module):
         num_blocks: int = 2,  # FIXME: Make 5 again
         resnet_v2: bool = True,
         hash_class: Type = SimHash,
+        max_u: float = jnp.inf,
+        max_epistemic_variance_reward: float = 1.0,
+        discount: float = 0.9997,
         hash_args: dict[str, Any] | None = None,
         name="az_net",
     ):
@@ -59,6 +62,9 @@ class EpistemicAZNet(hk.Module):
         self.resnet_class = BlockV2 if resnet_v2 else BlockV1
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
+        self.max_u = max_u
+        self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount ** 2)
+        self.max_reward_epistemic_variance = max_epistemic_variance_reward
 
     def __call__(
         self, x, is_training, test_local_stats, update_hash: bool = False
@@ -117,12 +123,17 @@ class EpistemicAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        seen = hash_obj(x)
+        scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
+
+        if not is_training:
+            # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
+            u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
+            u.clip(min=0, max=self.max_u)
 
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, ~seen
+        return main_policy_logits, exploration_policy_logits, v, u, jnp.zeros_like(v)
 
 
 class MinatarEpistemicAZNet(hk.Module):
@@ -185,8 +196,8 @@ class MinatarEpistemicAZNet(hk.Module):
         main_policy_logits = hk.Linear(self.num_actions)(main_policy_logits)
 
         # exploration policy head
-        exploration_policy_logits = jax.lax.stop_gradient(x)
-        exploration_policy_logits = hk.Linear(self.hidden_layers_size)(exploration_policy_logits)
+        # exploration_policy_logits = jax.lax.stop_gradient(x)
+        exploration_policy_logits = hk.Linear(self.hidden_layers_size)(x)
         exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
         exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)
 
@@ -194,12 +205,11 @@ class MinatarEpistemicAZNet(hk.Module):
         v = hk.Linear(self.hidden_layers_size)(x)
         v = jax.nn.relu(v)
         v = hk.Linear(1)(v)
-        # v = jnp.tanh(v)   # Needed only in zero-sum games, and this is a minatar net
         v = v.reshape((-1,))
 
         # ube head
-        u = jax.lax.stop_gradient(x)
-        u = hk.Linear(self.hidden_layers_size)(u)
+        # u = jax.lax.stop_gradient(x)
+        u = hk.Linear(self.hidden_layers_size)(x)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
         u = jnp.exp2(u)
