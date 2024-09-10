@@ -392,18 +392,15 @@ def reanalyze(
     value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
     ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
 
-    completed_qvalues_epistemic_variance: chex.Array = mask_invalid_actions(
+    completed_q_and_std_scores: chex.Array = mask_invalid_actions(
         jax.vmap(complete_qs)(
-            search_summary.qvalues_epistemic_variance,
+            search_summary.qvalues + config.exploration_beta * jnp.sqrt(search_summary.qvalues_epistemic_variance),
             search_summary.visit_counts,
-            search_summary.value_epistemic_std ** 2),
+            search_summary.value + config.exploration_beta * search_summary.value_epistemic_std),
         invalid_actions
     )
-    # completed_qvalues_epistemic_variance: chex.Array =
-    #     search_summary.qvalues_epistemic_variance, invalid_actions
-    # )
     exploration_policy_target = jax.nn.softmax(
-        completed_qvalues_epistemic_variance * config.exploration_policy_target_temperature
+        completed_q_and_std_scores * config.exploration_policy_target_temperature
     )
 
     # ##################
