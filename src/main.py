@@ -4,7 +4,7 @@ import datetime
 import time
 import os
 import pickle
-from typing import Annotated, NamedTuple, Type, Any
+from typing import Annotated, Literal, NamedTuple, Type, Any
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -21,8 +21,9 @@ import sys
 from pgx.experimental import auto_reset  # type: ignore
 from hashes import LCGHash, SimHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
-# import wrappers
 import jit_env
+
+# import wrappers
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
@@ -67,7 +68,7 @@ class Config(pydantic.BaseModel):
     # training
     learning_rate: float = 0.001
     learning_starts: int = int(5e3)  # While buffer size < learning_starts, executes random actions
-    scale_uncertainty_losses: float = 1.0    # Scales the exploration policy and ube head to reduce influence on body
+    scale_uncertainty_losses: float = 1.0  # Scales the exploration policy and ube head to reduce influence on body
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
@@ -113,7 +114,6 @@ class Context(NamedTuple):
     optimizer: optax.GradientTransformation
     scale_uncertainty_losses: float
 
-
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):
         return 1
@@ -140,12 +140,15 @@ def make_envs(env_class: str, env_id: str, truncation_length: int):
         case "brax":
             raise NotImplementedError(f"brax is not yet implemented")
 
-    selfplay_env = jit_env.wrappers.AutoReset(wrappers.TimeoutWrapper(selfplay_env, truncation_length, terminate_on_timeout=False))
+    selfplay_env = jit_env.wrappers.AutoReset(
+        wrappers.TimeoutWrapper(selfplay_env, truncation_length, terminate_on_timeout=False)
+    )
     planner_env = wrappers.TimeoutWrapper(planner_env, int(1e9), False)
 
     selfplay_env = wrappers.AddObservationToState(selfplay_env)
     planner_env = wrappers.AddObservationToState(planner_env)
     return selfplay_env, planner_env, eval_env
+
 
 def get_network(env: pgx.Env, config: Config):
     if "minatar" in config.env_id:
@@ -270,7 +273,9 @@ def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
-def selfplay(model: Model, config: Config, context: Context, last_states: pgx.State, rng_key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
+def selfplay(
+    model: Model, config: Config, context: Context, last_states: pgx.State, rng_key: chex.PRNGKey
+) -> tuple[pgx.State, SelfplayOutput]:
     model_params, model_state = model
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
@@ -402,8 +407,9 @@ def reanalyze(
         jax.vmap(complete_qs)(
             search_summary.qvalues + config.exploration_beta * jnp.sqrt(search_summary.qvalues_epistemic_variance),
             search_summary.visit_counts,
-            search_summary.value + config.exploration_beta * search_summary.value_epistemic_std),
-        invalid_actions
+            search_summary.value + config.exploration_beta * search_summary.value_epistemic_std,
+        ),
+        invalid_actions,
     )
     exploration_policy_target = jax.nn.softmax(
         completed_q_and_std_scores * config.exploration_policy_target_temperature
@@ -452,10 +458,7 @@ def complete_qs(qvalues, visit_counts, value):
     chex.assert_shape(value, [])
 
     # The missing qvalues are replaced by the value.
-    completed_qvalues = jnp.where(
-        visit_counts > 0,
-        qvalues,
-        value)
+    completed_qvalues = jnp.where(visit_counts > 0, qvalues, value)
     chex.assert_equal_shape([completed_qvalues, qvalues])
     return completed_qvalues
 
@@ -501,7 +504,9 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     )
     exploration_policy_loss = jnp.mean(exploration_policy_loss)
 
-    total_loss = value_loss + exploitation_policy_loss + (exploration_policy_loss + ube_loss) * context.scale_uncertainty_losses
+    total_loss = (
+        value_loss + exploitation_policy_loss + (exploration_policy_loss + ube_loss) * context.scale_uncertainty_losses
+    )
 
     # Log the policies entropies
     # Compute the probabilities by applying softmax
@@ -692,7 +697,7 @@ def main() -> None:
             batch_size=config.selfplay_batch_size,
             exploration=config.directed_exploration,
             discount=config.discount,
-            two_players_game=config.two_players_game
+            two_players_game=config.two_players_game,
         ),
         reanalyze_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -700,7 +705,7 @@ def main() -> None:
             batch_size=config.reanalyze_batch_size,
             exploration=False,
             discount=config.discount,
-            two_players_game=config.two_players_game
+            two_players_game=config.two_players_game,
         ),
         evaluation_recurrent_fn=get_epistemic_recurrent_fn(
             env=env,
@@ -708,10 +713,10 @@ def main() -> None:
             batch_size=config.num_eval_episodes,
             exploration=False,
             discount=config.discount,
-            two_players_game=config.two_players_game
+            two_players_game=config.two_players_game,
         ),
         optimizer=optimizer,
-        scale_uncertainty_losses=config.scale_uncertainty_losses
+        scale_uncertainty_losses=config.scale_uncertainty_losses,
     )
 
     # Training loop
@@ -767,8 +772,8 @@ def main() -> None:
         if frames < config.learning_starts:
             last_states, states = uniformrandomplay(config, context, jax.random.split(subkey, num_devices))
         else:
-            last_states, (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = selfplay(
-                model, config, context, last_states, jax.random.split(subkey, num_devices)
+            last_states, (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = (
+                selfplay(model, config, context, last_states, jax.random.split(subkey, num_devices))
             )
             log.update(
                 {
