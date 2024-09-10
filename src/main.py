@@ -67,7 +67,7 @@ class Config(pydantic.BaseModel):
     # training
     learning_rate: float = 0.001
     learning_starts: int = int(5e3)  # While buffer size < learning_starts, executes random actions
-    scale_uncertainty_losses: float = 0.01    # Scales the exploration policy and ube head to reduce influence on body
+    scale_uncertainty_losses: float = 1.0    # Scales the exploration policy and ube head to reduce influence on body
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
