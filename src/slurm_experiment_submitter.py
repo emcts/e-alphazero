@@ -57,10 +57,10 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
 #SBATCH --qos={qos}
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=4
-##SBATCH --partition=gpu
+#SBATCH --cpus-per-task=4GB
 #SBATCH --mem-per-cpu=4GB
 #SBATCH --partition=st,general,insy
+#SBATCH --output=/tudelft.net/staff-umbrella/inadequate/emctx/jobs/%j_%x.out
 
 # Setup env variables
 export WANDB_CACHE_DIR="/tudelft.net/staff-umbrella/inadequate/emctx/wandb/cache/"
@@ -155,7 +155,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
 
 
 submit_on_cluster = False
-environments = ["minatar-breakout", "minatar-asterix", "minatar-seaquest", "minatar-freeway"]
+environments = ["minatar-breakout"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway"]
 num_seeds = 2
 purpose = "Tuning exploration variations of EAZ on minatar"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"
@@ -165,7 +165,7 @@ maximum_number_of_iterations = 500
 exploration_betas = [20.0]
 exploitation_betas = [0.0]
 learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
-sample_actions = [True, False]
+sample_actions = [False]
 sample_actions_from_improved_policy = [False]
 scale_values = [False]
 epistemic_exploration_in_selfplay = [False, True]
@@ -230,6 +230,7 @@ print(f"Experiment summary: \n"
       f"sample_actions = {sample_actions}\n"
       f"sample_actions_from_improved_policy = {sample_actions_from_improved_policy}\n"
       f"scale_values = {scale_values}\n"
+      f"directed_exploration = {epistemic_exploration_in_selfplay}\n"
       f"Saving the job - names to file: {save_jobs_paths} \n"
       f"For a total number of jobs: {len(all_experiments)} \n"
       f"Jod ids: {first_job_id} to {last_job_id} \n"
