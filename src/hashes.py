@@ -10,11 +10,17 @@ class BaseHash(ABC):
         self.bits_per_hash = bits_per_hash
 
     @abstractmethod
-    def get_indices(self, x) -> tuple[jax.Array, jax.Array]: ...
+    def get_indices(self, x) -> jax.Array: ...
+
+    def get_byte_and_bit_indices(self, x) -> tuple[jax.Array, jax.Array]:
+        indices = self.get_indices(x)
+        byte_indices = (indices // 8).astype(jnp.uint32)
+        bit_indices = (indices % 8).astype(jnp.uint8)
+        return byte_indices, bit_indices
 
     def __call__(self, x) -> jax.Array:
         binary_set = self.get_binary_set()
-        byte_indices, bit_indices = self.get_indices(x)
+        byte_indices, bit_indices = self.get_byte_and_bit_indices(x)
         # bytes_from_set: [batch_size]
         bytes_from_set = binary_set[byte_indices]
         # seen: [batch_size]
@@ -29,9 +35,8 @@ class BaseHash(ABC):
 
     def update(self, x) -> None:
         binary_set = self.get_binary_set()
-        byte_indices, bit_indices = self.get_indices(x)
+        byte_indices, bit_indices = self.get_byte_and_bit_indices(x)
         new_bytes = binary_set[byte_indices] | (1 << bit_indices)
-        new_bytes = jnp.asarray(new_bytes, dtype=jnp.uint8)
         binary_set = binary_set.at[byte_indices].set(new_bytes)
         hk.set_state("binary_set", binary_set)
 
@@ -48,20 +53,21 @@ class LCGHash(hk.Module):
         self.bits_per_hash = bits_per_hash
 
     __call__ = BaseHash.__call__
+    get_byte_and_bit_indices = BaseHash.get_byte_and_bit_indices
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
-    def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
+    def get_indices(self, x) -> jax.Array:
         # TODO: Maybe try larger constants later
         # REMINDER: Set environment variable JAX_ENABLE_X64=True
-        # FIXME: scatter inputs have incompatible types: cannot safely cast value from dtype=int64 to dtype=int32
+        # FIXME: Setting the environment variable makes pgx break...
         MULTIPLIER: int = 29943829
         INCREMENT: int = 1
         TOP_BIT: int = 32
         MODULUS: int = 1 << TOP_BIT
 
         # x: [batch_size, ...]
-        x = jnp.asarray(x, dtype=jnp.uint64)
+        x = jax.lax.bitcast_convert_type(jnp.asarray(x, jnp.float64), jnp.uint64)
         while len(x.shape) > 1:
             accumulator = jnp.zeros(x.shape[:-1], dtype=jnp.uint64)
             for section in jnp.split(x, x.shape[-1], axis=-1):
@@ -72,11 +78,7 @@ class LCGHash(hk.Module):
             x = accumulator
         # x: [batch_size]
 
-        indices = x >> (TOP_BIT - self.bits_per_hash)
-        byte_indices = indices // 8
-        bit_indices = indices % 8
-
-        return byte_indices, bit_indices
+        return x >> (TOP_BIT - self.bits_per_hash)
 
 
 class SimHash(hk.Module):
@@ -86,10 +88,11 @@ class SimHash(hk.Module):
         self.bits_per_hash = bits_per_hash
 
     __call__ = BaseHash.__call__
+    get_byte_and_bit_indices = BaseHash.get_byte_and_bit_indices
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
-    def get_indices(self, x) -> tuple[jax.Array, jax.Array]:
+    def get_indices(self, x) -> jax.Array:
         # x: [batch_size, vector_size]
         x = jnp.reshape(x, (x.shape[0], -1))
         vector_size = x.shape[-1]
@@ -108,9 +111,4 @@ class SimHash(hk.Module):
         powers_of_two = 2 ** jnp.arange(self.bits_per_hash, dtype=jnp.uint32)
         masked_powers = jnp.where(product < 0.0, powers_of_two, 0)
         # indices: [batch_size]
-        indices = jnp.sum(masked_powers, axis=1)
-
-        byte_indices = indices // 8
-        bit_indices = indices % 8
-
-        return byte_indices, bit_indices
+        return jnp.sum(masked_powers, axis=1)
