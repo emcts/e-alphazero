@@ -43,7 +43,7 @@ class Config(pydantic.BaseModel):
     linear_layer_size: int = 128
     num_channels: int = 16
     # Local uncertainty parameters
-    hash_class: Type = SimHash
+    hash_class: Literal["SimHash", "LCGHash"] = "SimHash"
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
@@ -149,6 +149,12 @@ def make_envs(env_class: str, env_id: str, truncation_length: int):
 
 def get_network(env: pgx.Env, config: Config):
     if "minatar" in config.env_id:
+        hash_class: Type
+        match config.hash_class:
+            case "LCGHash":
+                hash_class = LCGHash
+            case "SimHash":
+                hash_class = SimHash
         return MinatarEpistemicAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
@@ -156,7 +162,7 @@ def get_network(env: pgx.Env, config: Config):
             max_epistemic_variance_reward=1.0,
             discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
-            hash_class=config.hash_class,
+            hash_class=hash_class,
         )
     else:
         return EpistemicAZNet(  # FIXME: Switch to the other network
