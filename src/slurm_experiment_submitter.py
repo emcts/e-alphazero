@@ -30,7 +30,8 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                        qos="medium", exploration_beta=0.0, learning_rate=0.001, sample_action=True,
                        sample_action_from_improved_policy=False,
                        exploitation_beta=0.0, maximum_number_of_iterations=10,
-                       epistemic_exploration_in_selfplay=None, rescale_q=True,
+                       directed_exploration=None, rescale_q=True,
+                       training_to_interactions_ratio=2,
                        ):
     jobname = "eaz" + "_" + environment.replace('minatar-', '')
     if runtime < 1:
@@ -48,8 +49,10 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                   f"sample_from_improved_policy={sample_action_from_improved_policy} " \
                   f"exploitation_beta={exploitation_beta} " \
                   f"maximum_number_of_iterations={maximum_number_of_iterations} " \
-                  f"directed_exploration={epistemic_exploration_in_selfplay} " \
-                  f"rescale_q_values_in_search={rescale_q}"
+                  f"directed_exploration={directed_exploration} " \
+                  f"rescale_q_values_in_search={rescale_q} " \
+                  f"slurm_job_id=$SLURM_JOB_ID " \
+                  f"training_to_interactions_ratio={training_to_interactions_ratio}"
 
     script_text = f"""#!/bin/bash
 #SBATCH --job-name={jobname}
@@ -80,7 +83,8 @@ srun apptainer exec --nv --mount type=bind,src=/tudelft.net/staff-umbrella/inade
 
 def make_all_experiments(num_seeds, exploration_betas, environments, learning_rates,
                          results_path, sample_actions, sample_actions_from_improved_policy, exploitation_betas,
-                         maximum_number_of_iterations, epistemic_exploration_in_selfplay, rescale_qs):
+                         maximum_number_of_iterations, directed_exploration, rescale_qs, 
+                         training_to_interactions_ratios):
     """
         This function returns a list of all sbatch files with the right hps (env, sigma, n, k) x 2.
         The first is the real experiment: viac, env, sigma, n, k),
@@ -115,41 +119,43 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                 for sample_action in sample_actions:
                     for sample_action_from_improved_policy in sample_actions_from_improved_policy:
                         for exploitation_beta in exploitation_betas:
-                            for epistemic_exploration in epistemic_exploration_in_selfplay:
+                            for do_directed_exploration in directed_exploration:
                                 for rescale_q in rescale_qs:
-                                    for _ in range(num_seeds):
-                                        # Compute runtime
-                                        runtime = maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
-                                        if runtime <= 4:
-                                            qos = "short"
-                                        elif runtime <= 24:
-                                            qos = "medium"
-                                        else:
-                                            qos = "long"
-                                        # Setup viac experiments
-                                        seed = random.randrange(low, high)
-                                        run_name = f"eaz_{seed}_{env_id}_{time.asctime(time.localtime(time.time()))}"
-                                        local_results_path = results_path + f"/{env_id}/eaz/"
-                                        script_text, full_params = make_sbatch_script(environment=env_id,
-                                                                                      seed=seed,
-                                                                                      run_name=run_name,
-                                                                                      results_path=local_results_path,
-                                                                                      runtime=runtime,
-                                                                                      qos=qos,
-                                                                                      exploration_beta=exploration_beta,
-                                                                                      learning_rate=learning_rate,
-                                                                                      sample_action=sample_action,
-                                                                                      sample_action_from_improved_policy=sample_action_from_improved_policy,
-                                                                                      exploitation_beta=exploitation_beta,
-                                                                                      maximum_number_of_iterations=maximum_number_of_iterations,
-                                                                                      epistemic_exploration_in_selfplay=epistemic_exploration,
-                                                                                      rescale_q=rescale_q,
-                                                                                      )
-                                        seeds.append(seed)
-                                        run_names.append(run_name)
-                                        paths_list.append(f"/{env_id}/eaz/{run_name}")
-                                        all_experiments.append(script_text)
-                                        full_params_list.append(full_params)
+                                    for training_to_interactions_ratio in training_to_interactions_ratios:
+                                        for _ in range(num_seeds):
+                                            # Compute runtime
+                                            runtime = maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
+                                            if runtime <= 4:
+                                                qos = "short"
+                                            elif runtime <= 24:
+                                                qos = "medium"
+                                            else:
+                                                qos = "long"
+                                            # Setup viac experiments
+                                            seed = random.randrange(low, high)
+                                            run_name = f"eaz_{seed}_{env_id}_{time.asctime(time.localtime(time.time()))}"
+                                            local_results_path = results_path + f"/{env_id}/eaz/"
+                                            script_text, full_params = make_sbatch_script(environment=env_id,
+                                                                                          seed=seed,
+                                                                                          run_name=run_name,
+                                                                                          results_path=local_results_path,
+                                                                                          runtime=runtime,
+                                                                                          qos=qos,
+                                                                                          exploration_beta=exploration_beta,
+                                                                                          learning_rate=learning_rate,
+                                                                                          sample_action=sample_action,
+                                                                                          sample_action_from_improved_policy=sample_action_from_improved_policy,
+                                                                                          exploitation_beta=exploitation_beta,
+                                                                                          maximum_number_of_iterations=maximum_number_of_iterations,
+                                                                                          directed_exploration=do_directed_exploration,
+                                                                                          rescale_q=rescale_q,
+                                                                                          training_to_interactions_ratio=training_to_interactions_ratio,
+                                                                                          )
+                                            seeds.append(seed)
+                                            run_names.append(run_name)
+                                            paths_list.append(f"/{env_id}/eaz/{run_name}")
+                                            all_experiments.append(script_text)
+                                            full_params_list.append(full_params)
 
     return all_experiments, run_names, seeds, full_params_list, paths_list
 
@@ -157,7 +163,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
 submit_on_cluster = False
 environments = ["minatar-breakout"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway", "minatar-space_invaders"]
 num_seeds = 2
-purpose = "Tuning exploration variations of EAZ on minatar"
+purpose = "Tuning training to interaction ratios"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"
 true_results_path = "/tudelft.net/staff-umbrella/inadequate/emctx/results"
 local_results_path = "/home/yaniv"
@@ -168,7 +174,9 @@ learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
 sample_actions = [False]
 sample_actions_from_improved_policy = [False]
 scale_values = [False]
-epistemic_exploration_in_selfplay = [False, True]
+directed_exploration = [False, True]
+training_to_interactions_ratios = [2, 4, 8, 16, 32]
+
 save_jobs_paths = True
 job_paths = []
 job_paths_file_name = f"{purpose} {time.asctime(time.localtime(time.time()))}"
@@ -182,8 +190,9 @@ all_experiments, run_names, seeds, full_params_list, paths_list = make_all_exper
                                                                                        sample_actions_from_improved_policy=sample_actions_from_improved_policy,
                                                                                        exploitation_betas=exploitation_betas,
                                                                                        maximum_number_of_iterations=maximum_number_of_iterations,
-                                                                                       epistemic_exploration_in_selfplay=epistemic_exploration_in_selfplay,
-                                                                                       rescale_qs=scale_values)
+                                                                                       directed_exploration=directed_exploration,
+                                                                                       rescale_qs=scale_values,
+                                                                                       training_to_interactions_ratios=training_to_interactions_ratios)
 
 first_job_id = 0
 last_job_id = 0
@@ -230,7 +239,9 @@ print(f"Experiment summary: \n"
       f"sample_actions = {sample_actions}\n"
       f"sample_actions_from_improved_policy = {sample_actions_from_improved_policy}\n"
       f"scale_values = {scale_values}\n"
-      f"directed_exploration = {epistemic_exploration_in_selfplay}\n"
+      f"directed_exploration = {directed_exploration}\n"
+      f"training_to_interactions_ratios = {training_to_interactions_ratios}\n"
+      
       f"Saving the job - names to file: {save_jobs_paths} \n"
       f"For a total number of jobs: {len(all_experiments)} \n"
       f"Jod ids: {first_job_id} to {last_job_id} \n"
