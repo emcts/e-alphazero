@@ -153,16 +153,16 @@ def make_envs(env_class: str, env_id: str, truncation_length: int):
     return selfplay_env, planner_env, eval_env
 
 
-def get_network(env: pgx.Env, config: Config):
+def get_network(env: pgx.Env, config: Config) -> hk.Module:
+    hash_class: Type
+    match config.hash_class:
+        case "LCGHash":
+            hash_class = LCGHash
+        case "SimHash":
+            hash_class = SimHash
+        case "XXHash":
+            hash_class = XXHash
     if "minatar" in config.env_id:
-        hash_class: Type
-        match config.hash_class:
-            case "LCGHash":
-                hash_class = LCGHash
-            case "SimHash":
-                hash_class = SimHash
-            case "XXHash":
-                hash_class = XXHash
         return MinatarEpistemicAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
@@ -173,8 +173,10 @@ def get_network(env: pgx.Env, config: Config):
             hash_class=hash_class,
         )
     else:
-        return EpistemicAZNet(  # FIXME: Switch to the other network
+        # TODO: Get hyper-parameters from config
+        return EpistemicAZNet(
             num_actions=env.num_actions,
+            hash_class=hash_class,
             # num_hidden_layers=config.hidden_layers,
             # layer_size=config.linear_layer_size,
         )
@@ -192,7 +194,9 @@ def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
             value,
             value_epistemic_variance,
             reward_epistemic_variance,
-        ) = net(x, is_training=is_training, test_local_stats=False, update_hash=update_hash)
+        ) = net(
+            x, is_training=is_training, test_local_stats=False, update_hash=update_hash
+        )  # type: ignore
         return (
             exploitation_policy_logits,
             exploration_policy_logits,
@@ -593,7 +597,7 @@ def main() -> None:
     config: Config = Config(**config_dict)  # type: ignore
 
     if config.debug:
-        config.selfplay_batch_size = 32  # FIXME: Return these hyperparameters to normal numbers
+        config.selfplay_batch_size = 32
         config.selfplay_simulations_per_step = 16
         config.reanalyze_simulations_per_step = 16
         config.selfplay_steps = 64
