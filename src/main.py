@@ -614,7 +614,7 @@ def main() -> None:
         config.max_replay_buffer_length = 100_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 1000
-        # config.track = False
+        config.track = False
         config.maximum_number_of_iterations = max(
             10, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
         )
