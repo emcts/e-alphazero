@@ -44,7 +44,7 @@ class Config(pydantic.BaseModel):
     linear_layer_size: int = 128
     num_channels: int = 16
     # Local uncertainty parameters
-    hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "SimHash"
+    hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "XXHash"
     # UBE parameters
     max_ube: float = jnp.inf  # If known, the maximum value^2
     # selfplay
