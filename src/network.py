@@ -225,17 +225,17 @@ class MinatarEpistemicAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
+        scaled_state_novelty = (~hash_obj(jax.lax.stop_gradient(x))) * self.max_reward_epistemic_variance
 
         if not is_training:
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
-            u.clip(min=0, max=self.max_u)
+            u = u.clip(min=0, max=self.max_u)
 
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, jnp.zeros_like(v)
+        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
 
 
 class FullyConnectedAZNet(hk.Module):
@@ -303,14 +303,14 @@ class FullyConnectedAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        scaled_state_novelty = (~hash_obj(original_input)) * self.max_reward_epistemic_variance
+        scaled_state_novelty = (~hash_obj(jax.lax.stop_gradient(original_input))) * self.max_reward_epistemic_variance
 
         if not is_training:
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
-            u.clip(min=0, max=self.max_u)
+            u = u.clip(min=0, max=self.max_u)
 
         if update_hash:
             hash_obj.update(original_input)
 
-        return main_policy_logits, exploration_policy_logits, v, u, jnp.zeros_like(v)
+        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty

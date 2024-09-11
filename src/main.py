@@ -245,7 +245,8 @@ def get_epistemic_recurrent_fn(
 
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
-            reward_epistemic_variance=reward_epistemic_variance,  # type: ignore
+            # NOTE: We have a known reward model, so we pass 0 reward uncertainty.
+            reward_epistemic_variance=jnp.zeros_like(reward_epistemic_variance),  # type: ignore
             discount=batched_discount,  # type: ignore
             prior_logits=logits,  # type: ignore
             value=value,  # type: ignore
