@@ -155,7 +155,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
 
 
 submit_on_cluster = False
-environments = ["minatar-breakout"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway"]
+environments = ["minatar-breakout"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway", "minatar-space_invaders"]
 num_seeds = 2
 purpose = "Tuning exploration variations of EAZ on minatar"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"

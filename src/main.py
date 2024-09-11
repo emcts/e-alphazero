@@ -45,6 +45,8 @@ class Config(pydantic.BaseModel):
     num_channels: int = 16
     # Local uncertainty parameters
     hash_class: Literal["SimHash", "LCGHash"] = "SimHash"
+    # UBE parameters
+    max_ube: float = jnp.inf  # If known, the maximum value^2
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
@@ -90,6 +92,7 @@ class Config(pydantic.BaseModel):
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
     wandb_project: str = "e-alphazero"
     wandb_run_name: str | None = None
+    wandb_team_name: str = "emcts"
 
     class Config:
         extra = "forbid"
@@ -161,7 +164,7 @@ def get_network(env: pgx.Env, config: Config):
         return MinatarEpistemicAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
-            max_u=jnp.iinfo(jnp.int32).max,
+            max_u=config.max_ube,
             max_epistemic_variance_reward=1.0,
             discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
@@ -608,7 +611,7 @@ def main() -> None:
         config.max_replay_buffer_length = 100_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 1000
-        config.track = False
+        # config.track = False
         config.maximum_number_of_iterations = max(
             10, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
         )
@@ -628,7 +631,13 @@ def main() -> None:
         / config.reanalyze_batch_size
     )
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
-    # Make sure min replay buffer length makes sense
+    if "minatar" in config.env_id:
+        if "space_invaders" in config.env_id:
+            config.max_ube = 200 ** 2
+        else:
+            config.max_ube = 20 ** 2
+
+# Make sure min replay buffer length makes sense
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
 
@@ -636,7 +645,8 @@ def main() -> None:
 
     # Initialize Weights & Biases.
     if config.track:
-        wandb.init(project=config.wandb_project, config=config.model_dump(), name=config.wandb_run_name)
+        wandb.init(project=config.wandb_project, config=config.model_dump(), name=config.wandb_run_name,
+                   entity=config.wandb_team_name)
 
     # Identify devices.
     devices = jax.local_devices()
