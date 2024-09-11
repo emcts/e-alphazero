@@ -475,6 +475,7 @@ def complete_qs(qvalues, visit_counts, value):
 
 
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
+    MINIMUM_LOG_UBE_TARGET = -10
     (
         exploitation_logits,
         exploration_logits,
@@ -489,7 +490,10 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     value_loss = jnp.mean(value_loss)  # TODO: figure out if mask is needed because of episode truncation
     absolute_value_error = jnp.abs(value - reanalyze_output.value_target)
 
-    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
+    ube_loss = optax.l2_loss(
+        jnp.log2(value_epistemic_variance),
+        jnp.maximum(jnp.log2(reanalyze_output.ube_target), MINIMUM_LOG_UBE_TARGET),
+    )
     ube_loss = jnp.mean(ube_loss)
 
     exploitation_policy_loss = optax.softmax_cross_entropy(
