@@ -116,6 +116,7 @@ class Context(NamedTuple):
     evaluation_recurrent_fn: emctx.EpistemicRecurrentFn
     optimizer: optax.GradientTransformation
     scale_uncertainty_losses: float
+    hash_path: str
 
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):
@@ -520,6 +521,9 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # Compute entropy: -sum(p * log(p))
     mean_exploration_policy_entropy = -jnp.sum(exploration_probs * exploration_log_probs, axis=-1).mean()
 
+    # batch novelty, i.e. how many of these states have we "seen" before.
+    batch_novelty = reward_epistemic_variance.mean()
+
     return total_loss, (
         model_state,
         absolute_value_error,
@@ -529,21 +533,22 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         ube_loss,
         exploitation_policy_loss,
         exploration_policy_loss,
+        batch_novelty,
     )
 
 
 @partial(jax.pmap, axis_name="i", static_broadcasted_argnums=[2])
 def train(model: Model, opt_state, context: Context, reanalyze_output: ReanalyzeOutput):
     model_params, model_state = model
-    grads, (model_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses) = (
-        jax.grad(loss_fn, has_aux=True)(model_params, model_state, context, reanalyze_output)
+    grads, (model_state, *statistics) = jax.grad(loss_fn, has_aux=True)(
+        model_params, model_state, context, reanalyze_output
     )
     grads = jax.lax.pmean(grads, axis_name="i")
     updates, opt_state = context.optimizer.update(grads, opt_state)
     model_params = optax.apply_updates(model_params, updates)
     model = (model_params, model_state)  # type: ignore
 
-    return (model, opt_state, absolute_value_error, exploitation_policy_entropy, exploration_policy_entropy, *losses)
+    return (model, opt_state, *statistics)
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
@@ -725,6 +730,7 @@ def main() -> None:
         ),
         optimizer=optimizer,
         scale_uncertainty_losses=config.scale_uncertainty_losses,
+        hash_path="minatar_az_net/xxhash32",  # TODO: Automatically figure this out
     )
 
     # Training loop
@@ -807,6 +813,7 @@ def main() -> None:
         exploration_policy_loss_list = []
         exploitation_policy_entropy_list = []
         exploration_policy_entropy_list = []
+        batch_novelty_list = []
 
         # If the buffer doesn't have enough interactions yet, keep interacting, or learning shouldn't start yet
         if not buffer_fn.can_sample(buffer_state) or frames < config.learning_starts:
@@ -843,6 +850,7 @@ def main() -> None:
                     ube_loss,
                     exploitation_policy_loss,
                     exploration_policy_loss,
+                    batch_novelty,
                 ) = train(model, opt_state, context, reanalyze_output)
                 absolute_value_error = jnp.concatenate(absolute_value_error)
 
@@ -857,24 +865,12 @@ def main() -> None:
                 exploration_policy_loss_list.append(exploration_policy_loss.mean().item())
                 exploitation_policy_entropy_list.append(exploitation_policy_entropy.mean().item())
                 exploration_policy_entropy_list.append(exploration_policy_entropy.mean().item())
-                # TODO: Do we also want to log something per inner loop?
-
-            # Calculate average losses for logging.
-            mean_value_loss = sum(value_loss_list) / len(value_loss_list)
-            mean_ube_loss = sum(ube_loss_list) / len(ube_loss_list)
-            mean_exploitation_policy_loss = sum(exploitation_policy_loss_list) / len(exploitation_policy_loss_list)
-            mean_exploration_policy_loss = sum(exploration_policy_loss_list) / len(exploration_policy_loss_list)
-            mean_exploitation_policy_entropy = sum(exploitation_policy_entropy_list) / len(
-                exploitation_policy_entropy_list
-            )
-            mean_exploration_policy_entropy = sum(exploration_policy_entropy_list) / len(
-                exploration_policy_entropy_list
-            )
+                batch_novelty_list.append(batch_novelty.mean().item())
 
             # Calculate "replay buffer uniqueness" (according to hash set).
             _model_params, model_state = model
             # FIXME: Currently uses hardcoded network name and module name.
-            binary_set = model_state["minatar_az_net/xxhash32"]["binary_set"][0]  # index 0 because of device dimension
+            binary_set = model_state[context.hash_path]["binary_set"][0]  # index 0 because of device dimension
             new_set_bits = jax.lax.population_count(binary_set).sum().item()  # i.e. "seen" states
             set_bit_diff = new_set_bits - set_bits
             set_bits = new_set_bits
@@ -884,14 +880,19 @@ def main() -> None:
                     "iteration": iteration,
                     "hours": (time.time() - start_time) / 3600,
                     "frames": frames,
-                    "train/value_loss": mean_value_loss,
-                    "train/ube_loss": mean_ube_loss,
-                    "train/exploitation_policy_loss": mean_exploitation_policy_loss,
-                    "train/exploration_policy_loss": mean_exploration_policy_loss,
-                    "train/mean_exploitation_policy_entropy": mean_exploitation_policy_entropy,
-                    "train/mean_exploration_policy_entropy": mean_exploration_policy_entropy,
+                    "train/value_loss": sum(value_loss_list) / len(value_loss_list),
+                    "train/ube_loss": sum(ube_loss_list) / len(ube_loss_list),
+                    "train/exploitation_policy_loss": sum(exploitation_policy_loss_list)
+                    / len(exploitation_policy_loss_list),
+                    "train/exploration_policy_loss": sum(exploration_policy_loss_list)
+                    / len(exploration_policy_loss_list),
+                    "train/mean_exploitation_policy_entropy": sum(exploitation_policy_entropy_list)
+                    / len(exploitation_policy_entropy_list),
+                    "train/mean_exploration_policy_entropy": sum(exploration_policy_entropy_list)
+                    / len(exploration_policy_entropy_list),
                     "hash/set_bits": set_bits,
                     "hash/new_bits_ratio": set_bit_diff / frame_diff,
+                    "hash/batch_novelty": sum(batch_novelty_list) / len(batch_novelty_list),
                 }
             )
 
