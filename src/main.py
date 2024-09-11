@@ -45,12 +45,13 @@ class Config(pydantic.BaseModel):
     num_channels: int = 16
     # Local uncertainty parameters
     hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "XXHash"
+    hash_path: str = "minatar_az_net/xxhash32"
     # UBE parameters
     max_ube: float = jnp.inf  # If known, the maximum value^2
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
-    selfplay_steps: int = 256
+    selfplay_steps: int = 64
     directed_exploration: bool = False  # if true, betaExploration = 0 and uses exploitation policy in selfplay
     sample_actions: bool = False
     sample_from_improved_policy: bool = False
@@ -637,6 +638,8 @@ def main() -> None:
         / config.reanalyze_batch_size
     )
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
+    config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
+    config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
     if "minatar" in config.env_id:
         if "space_invaders" in config.env_id:
             config.max_ube = 200**2
@@ -646,6 +649,12 @@ def main() -> None:
     # Make sure min replay buffer length makes sense
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
+
+    assert config.min_replay_buffer_length < config.max_replay_buffer_length, f"max_replay_buffer_length must be > " \
+                                                                              f"min_replay_buffer_length and isn't. \n" \
+                                                                              f"max_replay_buffer_length = " \
+                                                                              f"{config.min_replay_buffer_length}, and " \
+                                                                              f"min_replay_buffer_length = {config.min_replay_buffer_length}, "
 
     print(f"Printing the config:\n{config}", flush=True)
 
@@ -737,7 +746,7 @@ def main() -> None:
         ),
         optimizer=optimizer,
         scale_uncertainty_losses=config.scale_uncertainty_losses,
-        hash_path="minatar_az_net/xxhash32",  # TODO: Automatically figure this out
+        hash_path=config.hash_path,  # TODO: Automatically figure this out
     )
 
     # Training loop
@@ -829,7 +838,7 @@ def main() -> None:
                     "iteration": iteration,
                     "hours": (time.time() - start_time) / 3600,
                     "frames": frames,
-                    "executing random moves until": config.learning_starts,
+                    "executing random moves until": max(config.learning_starts, config.min_replay_buffer_length),
                 }
             )
             continue
