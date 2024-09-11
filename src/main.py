@@ -93,6 +93,8 @@ class Config(pydantic.BaseModel):
     wandb_project: str = "e-alphazero"
     wandb_run_name: str | None = None
     wandb_team_name: str = "emcts"
+    # slurm info
+    slurm_job_id: int | None = None
 
     class Config:
         extra = "forbid"
