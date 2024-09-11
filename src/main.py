@@ -51,7 +51,7 @@ class Config(pydantic.BaseModel):
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
     selfplay_steps: int = 256
-    directed_exploration: bool = False
+    directed_exploration: bool = False  # if true, betaExploration = 0 and uses exploitation policy in selfplay
     sample_actions: bool = False
     sample_from_improved_policy: bool = False
     rescale_q_values_in_search: bool = True
@@ -300,9 +300,10 @@ def selfplay(
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
         selfplay_beta = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta, lambda: 0.0)
+        policy_logits = jax.lax.cond(config.directed_exploration, lambda: exploration_logits, lambda: _exploitation_logits)
 
         root = emctx.EpistemicRootFnOutput(
-            prior_logits=exploration_logits,  # type: ignore
+            prior_logits=policy_logits,  # type: ignore
             value=value,  # type: ignore
             value_epistemic_variance=value_epistemic_variance,  # type: ignore
             embedding=states,  # type: ignore
