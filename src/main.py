@@ -19,7 +19,7 @@ import chex
 import sys
 
 from pgx.experimental import auto_reset  # type: ignore
-from hashes import LCGHash, SimHash
+from hashes import LCGHash, SimHash, XXHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
 import jit_env
 
@@ -44,7 +44,7 @@ class Config(pydantic.BaseModel):
     linear_layer_size: int = 128
     num_channels: int = 16
     # Local uncertainty parameters
-    hash_class: Literal["SimHash", "LCGHash"] = "SimHash"
+    hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "SimHash"
     # UBE parameters
     max_ube: float = jnp.inf  # If known, the maximum value^2
     # selfplay
@@ -161,6 +161,8 @@ def get_network(env: pgx.Env, config: Config):
                 hash_class = LCGHash
             case "SimHash":
                 hash_class = SimHash
+            case "XXHash":
+                hash_class = XXHash
         return MinatarEpistemicAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
@@ -477,19 +479,6 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
     )
 
-    # TODO: Remove after testing
-    # jax.debug.print("before {a}", a=reward_epistemic_variance)
-    # (
-    #     exploitation_logits,
-    #     exploration_logits,
-    #     value,
-    #     value_epistemic_variance,
-    #     reward_epistemic_variance,
-    # ), model_state = context.forward.apply(
-    #     model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
-    # )
-    # jax.debug.print("after {a}", a=reward_epistemic_variance)
-
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
     value_loss = jnp.mean(value_loss)  # TODO: figure out if mask is needed because of episode truncation
     absolute_value_error = jnp.abs(value - reanalyze_output.value_target)
@@ -633,11 +622,11 @@ def main() -> None:
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     if "minatar" in config.env_id:
         if "space_invaders" in config.env_id:
-            config.max_ube = 200 ** 2
+            config.max_ube = 200**2
         else:
-            config.max_ube = 20 ** 2
+            config.max_ube = 20**2
 
-# Make sure min replay buffer length makes sense
+    # Make sure min replay buffer length makes sense
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
 
@@ -645,8 +634,12 @@ def main() -> None:
 
     # Initialize Weights & Biases.
     if config.track:
-        wandb.init(project=config.wandb_project, config=config.model_dump(), name=config.wandb_run_name,
-                   entity=config.wandb_team_name)
+        wandb.init(
+            project=config.wandb_project,
+            config=config.model_dump(),
+            name=config.wandb_run_name,
+            entity=config.wandb_team_name,
+        )
 
     # Identify devices.
     devices = jax.local_devices()
@@ -876,7 +869,7 @@ def main() -> None:
             # Calculate "replay buffer uniqueness" (according to hash set).
             _model_params, model_state = model
             # FIXME: Currently uses hardcoded network name and module name.
-            binary_set = model_state["minatar_az_net/sim_hash"]["binary_set"][0]  # index 0 because of device dimension
+            binary_set = model_state["minatar_az_net/xxhash32"]["binary_set"][0]  # index 0 because of device dimension
             new_set_bits = jax.lax.population_count(binary_set).sum().item()  # i.e. "seen" states
             set_bit_diff = new_set_bits - set_bits
             set_bits = new_set_bits

@@ -4,7 +4,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
-from hashes import LCGHash, SimHash
+from hashes import LCGHash, SimHash, XXHash
 
 
 class BlockV1(hk.Module):
@@ -165,7 +165,7 @@ class MinatarEpistemicAZNet(hk.Module):
         max_u = if passed, clips the UBE prediction <= max_u. In board games for example, max_u = 1
         max_epistemic_variance_reward = used to scale the hash to max_reward ** 2 := max V[R]
         discount = the bellman discount, used to scale the reward uncertainty for novel states
-        hash_class = SimHash or LCGHash
+        hash_class = SimHash, LCGHash, or XXHash
         """
         super().__init__(name=name)
         self.num_actions = num_actions
