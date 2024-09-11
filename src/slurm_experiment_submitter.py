@@ -32,7 +32,7 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                        exploitation_beta=0.0, maximum_number_of_iterations=10,
                        directed_exploration=None, rescale_q=True,
                        training_to_interactions_ratio=2,
-                       ):
+                       hash_class="SimHash"):
     jobname = "eaz" + "_" + environment.replace('minatar-', '')
     if runtime < 1:
         runtime = f"01:00:00"
@@ -52,7 +52,8 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                   f"directed_exploration={directed_exploration} " \
                   f"rescale_q_values_in_search={rescale_q} " \
                   f"slurm_job_id=$SLURM_JOB_ID " \
-                  f"training_to_interactions_ratio={training_to_interactions_ratio}"
+                  f"training_to_interactions_ratio={training_to_interactions_ratio} " \
+                  f"hash_class={hash_class}"
 
     script_text = f"""#!/bin/bash
 #SBATCH --job-name={jobname}
@@ -60,7 +61,7 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
 #SBATCH --qos={qos}
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-task=4GB
+#SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=4GB
 #SBATCH --partition=st,general,insy
 #SBATCH --output=/tudelft.net/staff-umbrella/inadequate/emctx/jobs/%j_%x.out
@@ -84,7 +85,7 @@ srun apptainer exec --nv --mount type=bind,src=/tudelft.net/staff-umbrella/inade
 def make_all_experiments(num_seeds, exploration_betas, environments, learning_rates,
                          results_path, sample_actions, sample_actions_from_improved_policy, exploitation_betas,
                          maximum_number_of_iterations, directed_exploration, rescale_qs, 
-                         training_to_interactions_ratios):
+                         training_to_interactions_ratios, hash_classes):
     """
         This function returns a list of all sbatch files with the right hps (env, sigma, n, k) x 2.
         The first is the real experiment: viac, env, sigma, n, k),
@@ -122,40 +123,41 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                             for do_directed_exploration in directed_exploration:
                                 for rescale_q in rescale_qs:
                                     for training_to_interactions_ratio in training_to_interactions_ratios:
-                                        for _ in range(num_seeds):
-                                            # Compute runtime
-                                            runtime = maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
-                                            if runtime <= 4:
-                                                qos = "short"
-                                            elif runtime <= 24:
-                                                qos = "medium"
-                                            else:
-                                                qos = "long"
-                                            # Setup viac experiments
-                                            seed = random.randrange(low, high)
-                                            run_name = f"eaz_{seed}_{env_id}_{time.asctime(time.localtime(time.time()))}"
-                                            local_results_path = results_path + f"/{env_id}/eaz/"
-                                            script_text, full_params = make_sbatch_script(environment=env_id,
-                                                                                          seed=seed,
-                                                                                          run_name=run_name,
-                                                                                          results_path=local_results_path,
-                                                                                          runtime=runtime,
-                                                                                          qos=qos,
-                                                                                          exploration_beta=exploration_beta,
-                                                                                          learning_rate=learning_rate,
-                                                                                          sample_action=sample_action,
-                                                                                          sample_action_from_improved_policy=sample_action_from_improved_policy,
-                                                                                          exploitation_beta=exploitation_beta,
-                                                                                          maximum_number_of_iterations=maximum_number_of_iterations,
-                                                                                          directed_exploration=do_directed_exploration,
-                                                                                          rescale_q=rescale_q,
-                                                                                          training_to_interactions_ratio=training_to_interactions_ratio,
-                                                                                          )
-                                            seeds.append(seed)
-                                            run_names.append(run_name)
-                                            paths_list.append(f"/{env_id}/eaz/{run_name}")
-                                            all_experiments.append(script_text)
-                                            full_params_list.append(full_params)
+                                        for hash_class in hash_classes:
+                                            for _ in range(num_seeds):
+                                                # Compute runtime
+                                                runtime = maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
+                                                if runtime <= 4:
+                                                    qos = "short"
+                                                elif runtime <= 24:
+                                                    qos = "medium"
+                                                else:
+                                                    qos = "long"
+                                                # Setup viac experiments
+                                                seed = random.randrange(low, high)
+                                                run_name = f"eaz_{seed}_{env_id}_{time.asctime(time.localtime(time.time()))}"
+                                                local_results_path = results_path + f"/{env_id}/eaz/"
+                                                script_text, full_params = make_sbatch_script(environment=env_id,
+                                                                                              seed=seed,
+                                                                                              run_name=run_name,
+                                                                                              results_path=local_results_path,
+                                                                                              runtime=runtime,
+                                                                                              qos=qos,
+                                                                                              exploration_beta=exploration_beta,
+                                                                                              learning_rate=learning_rate,
+                                                                                              sample_action=sample_action,
+                                                                                              sample_action_from_improved_policy=sample_action_from_improved_policy,
+                                                                                              exploitation_beta=exploitation_beta,
+                                                                                              maximum_number_of_iterations=maximum_number_of_iterations,
+                                                                                              directed_exploration=do_directed_exploration,
+                                                                                              rescale_q=rescale_q,
+                                                                                              training_to_interactions_ratio=training_to_interactions_ratio,
+                                                                                              hash_class=hash_class)
+                                                seeds.append(seed)
+                                                run_names.append(run_name)
+                                                paths_list.append(f"/{env_id}/eaz/{run_name}")
+                                                all_experiments.append(script_text)
+                                                full_params_list.append(full_params)
 
     return all_experiments, run_names, seeds, full_params_list, paths_list
 
@@ -173,9 +175,10 @@ exploitation_betas = [0.0]
 learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
 sample_actions = [False]
 sample_actions_from_improved_policy = [False]
-scale_values = [False]
+scale_values = [True]
 directed_exploration = [False, True]
 training_to_interactions_ratios = [2, 4, 8, 16, 32]
+hash_classes = ["SimHash"]    # "LCGHash", "XXHash"
 
 save_jobs_paths = True
 job_paths = []
@@ -192,7 +195,8 @@ all_experiments, run_names, seeds, full_params_list, paths_list = make_all_exper
                                                                                        maximum_number_of_iterations=maximum_number_of_iterations,
                                                                                        directed_exploration=directed_exploration,
                                                                                        rescale_qs=scale_values,
-                                                                                       training_to_interactions_ratios=training_to_interactions_ratios)
+                                                                                       training_to_interactions_ratios=training_to_interactions_ratios,
+                                                                                       hash_classes=hash_classes)
 
 first_job_id = 0
 last_job_id = 0
