@@ -21,10 +21,9 @@ import pydantic
 import wandb
 from pgx.experimental import auto_reset  # type: ignore
 
+from envs.deep_sea import DeepSea
 from hashes import LCGHash, SimHash, XXHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
-
-# import wrappers
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
@@ -37,8 +36,8 @@ class Config(pydantic.BaseModel):
     debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
     auto_seed: bool = True  # If True and seed == 0, seeds with a random seed
     seed: int = 0
-    env_class: str = "pgx"
-    env_id: pgx.EnvId = "minatar-breakout"
+    env_class: Literal["pgx", "custom"] = "pgx"
+    env_id: pgx.EnvId | str = "minatar-breakout"
     maximum_number_of_iterations: int = 2000
     two_players_game: bool = False
     # network
@@ -677,7 +676,17 @@ def main() -> None:
     num_devices = len(devices)
 
     # Make the environment.
-    env = pgx.make(config.env_id)
+    env: pgx.Env
+    match (config.env_class, config.env_id):
+        case ("custom", str(s)) if s.startswith("deep_sea"):
+            # E.g. For DeepSea size 16, use "deep_sea-16".
+            s = s.removeprefix("deep_sea-")
+            size_of_grid = int(s) if s.isnumeric() else 4
+            env = DeepSea(size_of_grid=size_of_grid)
+        case ("pgx", env_id) if env_id in pgx.available_envs():
+            env = pgx.make(env_id)
+        case (cl, id):
+            assert False, f"Invalid environment settings: {cl}, {id}."
     # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)
     # baseline = pgx.make_baseline_model(config.env_id + "_v0")  # type: ignore
 
@@ -697,6 +706,8 @@ def main() -> None:
     model, opt_state = jax.device_put_replicated((model, opt_state), devices)
 
     # Initialize replay buffer.
+    # FIXME: UserWarning: Setting max_size dynamically sets the `max_length_time_axis` to be `max_size`//`add_batch_size = 3125`.
+    # This allows one to control exactly how many timesteps are stored in the buffer.Note that this overrides the `max_length_time_axis` argument.
     buffer_fn = fbx.make_prioritised_flat_buffer(
         max_length=config.max_replay_buffer_length,
         min_length=max(config.min_replay_buffer_length, config.reanalyze_batch_size),
@@ -890,7 +901,6 @@ def main() -> None:
 
             # Calculate "replay buffer uniqueness" (according to hash set).
             _model_params, model_state = model
-            # FIXME: Currently uses hardcoded network name and module name.
             binary_set = model_state[context.hash_path]["binary_set"][0]  # index 0 because of device dimension
             new_set_bits = jax.lax.population_count(binary_set).sum().item()  # i.e. "seen" states
             set_bit_diff = new_set_bits - set_bits
