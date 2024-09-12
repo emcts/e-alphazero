@@ -872,7 +872,7 @@ def main() -> None:
                       f"{ube_predictions}")
                 print(f"unseen_states states = \n"
                       f"{unseen_states}")
-                print(f"Number of seen states: = {unseen_states.sum().item()}")
+                print(f"Number of seen states: = {(1 - unseen_states).sum().item()}")
 
         frame_diff = config.selfplay_batch_size * config.selfplay_steps
         frames += frame_diff
