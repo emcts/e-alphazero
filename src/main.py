@@ -233,7 +233,7 @@ def get_epistemic_recurrent_fn(
         keys = jax.random.split(rng_key, batch_size)
         state = jax.vmap(env.step)(state, action, keys)
         value: chex.Array
-        (exploitation_logits, exploration_logits, value, value_epistemic_variance, reward_epistemic_variance), _ = (
+        (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
             forward.apply(model_params, model_state, state.observation, is_training=False)
         )
         logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
@@ -255,7 +255,7 @@ def get_epistemic_recurrent_fn(
         epistemic_recurrent_fn_output = emctx.EpistemicRecurrentFnOutput(
             reward=reward,  # type: ignore
             # NOTE: We have a known reward model, so we pass 0 reward uncertainty.
-            reward_epistemic_variance=jnp.zeros_like(reward_epistemic_variance),  # type: ignore
+            reward_epistemic_variance=jnp.zeros_like(reward),  # type: ignore
             discount=batched_discount,  # type: ignore
             prior_logits=logits,  # type: ignore
             value=value,  # type: ignore
