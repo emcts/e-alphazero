@@ -29,9 +29,22 @@ class DeepSeaState(pgx.State):
 
 
 class DeepSea(pgx.Env):
-    def __init__(self, size_of_grid: int = 4) -> None:
+    def __init__(self, size_of_grid: int = 4, action_map_key: chex.PRNGKey | None = None) -> None:
+        """
+        size_of_grid:
+            Deep Sea grid will be `size_of_grid X size_of_grid`
+        action_map_key:
+            When `None`, every state will have the same action mapping,
+            i.e. `0` always equals left, and `1` always equals right.
+            If a key is given, every state gets assigned a random mapping
+            which is consistent across episodes for a particular
+            environment instance.
+        """
         super().__init__()
         self.size_of_grid = size_of_grid
+        self.action_map = jnp.zeros([self.size_of_grid, self.size_of_grid], dtype=jnp.bool)
+        if action_map_key is not None:
+            self.action_map = jax.random.bernoulli(action_map_key, shape=self.action_map.shape) > 0
 
     def _init(self, key: chex.PRNGKey) -> DeepSeaState:
         observation = jnp.zeros([self.size_of_grid, self.size_of_grid], dtype=jnp.bool)
@@ -39,17 +52,19 @@ class DeepSea(pgx.Env):
         return DeepSeaState(observation=observation)
 
     def _step(self, state: DeepSeaState, action: jax.Array, key: chex.PRNGKey) -> DeepSeaState:
-        """action: 0(left), 1(right)"""
         assert isinstance(state, DeepSeaState)
-        # Action determines whether to shift horizontal position left (-1) or right (+1).
-        shift = jnp.where(action == 0, -1, 1)
+        # Action XOR action_flip determines whether to shift horizontal position left (-1) or right (+1).
+        action_flip = self.action_map[..., state._step_count - 1, state._horizontal_position]
+        shift = jnp.where((action == 0) ^ action_flip, -1, 1)
         horizontal_position = jnp.clip(state._horizontal_position + shift, 0, self.size_of_grid - 1)
         # Observation is just False everywhere except the position.
         observation = jnp.zeros_like(state.observation)
         # _step_count determines depth (it is incremented in the parent function).
-        observation = observation.at[..., state._step_count, horizontal_position].set(True)
+        observation = observation.at[
+            ..., jnp.minimum(state._step_count, self.size_of_grid - 1), horizontal_position
+        ].set(True)
         # Terminate once we reach the bottom.
-        terminated = state._step_count >= self.size_of_grid
+        terminated = state._step_count >= self.size_of_grid - 1
         # Boolean rewards will be automatically cast to floats when used.
         rewards = (
             (terminated & (horizontal_position == self.size_of_grid - 1))

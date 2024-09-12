@@ -675,6 +675,10 @@ def main() -> None:
     devices = jax.local_devices()
     num_devices = len(devices)
 
+    # Initialize RNG key.
+    rng_key = jax.random.PRNGKey(config.seed)
+    rng_key, subkey_for_env, subkey_for_dummy_state, subkey_for_init = jax.random.split(rng_key, 4)
+
     # Make the environment.
     env: pgx.Env
     match (config.env_class, config.env_id):
@@ -682,17 +686,13 @@ def main() -> None:
             # E.g. For DeepSea size 16, use "deep_sea-16".
             s = s.removeprefix("deep_sea-")
             size_of_grid = int(s) if s.isnumeric() else 4
-            env = DeepSea(size_of_grid=size_of_grid)
+            env = DeepSea(size_of_grid=size_of_grid, action_map_key=subkey_for_env)
         case ("pgx", env_id) if env_id in pgx.available_envs():
             env = pgx.make(env_id)
         case (cl, id):
             assert False, f"Invalid environment settings: {cl}, {id}."
     # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)
     # baseline = pgx.make_baseline_model(config.env_id + "_v0")  # type: ignore
-
-    # Initialize RNG key.
-    rng_key = jax.random.PRNGKey(config.seed)
-    rng_key, subkey_for_dummy_state, subkey_for_init = jax.random.split(rng_key, 3)
 
     # Initialize model.
     forward = get_forward_fn(env, config)
