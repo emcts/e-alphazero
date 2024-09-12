@@ -606,24 +606,55 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: chex.PRNGK
     return sum_of_rewards.mean()
 
 
+@partial(jax.pmap, static_broadcasted_argnums=[2])
+def debug_deep_sea(all_states_batch, model, context):
+    # print(f"all_states_batch.shape = {all_states_batch.shape}")
+    model_params, model_state = model
+
+    (_exploitation_logits, _exploration_logits, _value, value_epistemic_variance,
+     reward_epistemic_variance), _ = (
+        context.forward.apply(model_params, model_state, all_states_batch, is_training=True)
+    )
+    ube_predictions = jnp.reshape(value_epistemic_variance, shape=(all_states_batch.shape[-1], all_states_batch.shape[-1]))
+    unseen_states = jnp.reshape(reward_epistemic_variance,
+                                           shape=(all_states_batch.shape[-1], all_states_batch.shape[-1]))
+    return ube_predictions, unseen_states
+
 def main() -> None:
     # Get configuration from CLI.
     config_dict = omegaconf.OmegaConf.from_cli()
     config: Config = Config(**config_dict)  # type: ignore
 
     if config.debug:
-        config.selfplay_batch_size = 32
+        config.env_class = "custom"
+        config.env_id = "deep_sea-8"
+        config.selfplay_batch_size = 8
         config.selfplay_simulations_per_step = 16
         config.reanalyze_simulations_per_step = 16
-        config.selfplay_steps = 64
-        config.reanalyze_batch_size = 32
+        config.selfplay_steps = 8
+        config.reanalyze_batch_size = 256
         config.max_replay_buffer_length = 100_000
         config.min_replay_buffer_length = 64
-        config.learning_starts = 1000
+        config.learning_starts = 256
+        config.hash_class = "XXHash"
         config.track = False
+        config.directed_exploration = True
+        config.exploration_beta = 10.0
         config.maximum_number_of_iterations = max(
-            10, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
+            20, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
         )
+        config.directed_exploration = True
+    if config.env_class == "custom" and "deep_sea" in config.env_id:
+        s = config.env_id.removeprefix("deep_sea-")
+        size_of_grid = int(s) if s.isnumeric() else 4
+        all_states_batch = jnp.zeros([size_of_grid * size_of_grid, size_of_grid, size_of_grid], dtype=jnp.bool)
+        # all_states_batch = jnp.zeros([config.selfplay_batch_size, size_of_grid, size_of_grid], dtype=jnp.bool)
+        # for each row
+        for i in range(size_of_grid):
+            # for each column
+            for j in range(size_of_grid):
+                all_states_batch = all_states_batch.at[i * size_of_grid + j, i, j].set(True)
+        all_states_batch = jnp.expand_dims(all_states_batch, axis=0)
 
     # Update config with runtime computed values
     if config.auto_seed and config.seed == 0:
@@ -633,12 +664,12 @@ def main() -> None:
             f"{config.env_id}_beta={config.exploration_beta}_{config.seed}"
             f"_{time.asctime(time.localtime(time.time()))}"
         )
-    config.reanalyze_loops_per_selfplay = int(
+    config.reanalyze_loops_per_selfplay = max(1, int(
         config.training_to_interactions_ratio
         * config.selfplay_steps
         * config.selfplay_batch_size
         / config.reanalyze_batch_size
-    )
+    ))
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
@@ -830,6 +861,19 @@ def main() -> None:
                     "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
                 }
             )
+
+            if "deep_sea" in config.env_id:
+                print(
+                    f"states.observation.shape = {states.observation.shape}, "
+                    f"last_states.observation.shape = {last_states.observation.shape}, "
+                    f"all_states_batch.shape = {all_states_batch.shape}")
+                ube_predictions, unseen_states = debug_deep_sea(all_states_batch, model, context)
+                print(f"ube_predictions = \n"
+                      f"{ube_predictions}")
+                print(f"unseen_states states = \n"
+                      f"{unseen_states}")
+                print(f"Number of seen states: = {unseen_states.sum().item()}")
+
         frame_diff = config.selfplay_batch_size * config.selfplay_steps
         frames += frame_diff
 
