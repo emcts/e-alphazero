@@ -245,6 +245,7 @@ print(f"Experiment summary: \n"
       f"scale_values = {scale_values}\n"
       f"directed_exploration = {directed_exploration}\n"
       f"training_to_interactions_ratios = {training_to_interactions_ratios}\n"
+      f"hash_classes = {hash_classes}\n"
       
       f"Saving the job - names to file: {save_jobs_paths} \n"
       f"For a total number of jobs: {len(all_experiments)} \n"
