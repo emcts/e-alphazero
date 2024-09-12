@@ -1,27 +1,28 @@
-import random
-from functools import partial
 import datetime
-import time
 import os
 import pickle
-from typing import Annotated, Literal, NamedTuple, Type, Any
+import random
+import sys
+import time
+from functools import partial
+from typing import Annotated, Any, Literal, NamedTuple, Type
+
+import chex
+import emctx
+import flashbax as fbx  # type: ignore
 import haiku as hk
 import jax
 import jax.numpy as jnp
-import emctx
+import jit_env
 import omegaconf
 import optax  # type: ignore
 import pgx  # type: ignore
 import pydantic
 import wandb
-import flashbax as fbx  # type: ignore
-import chex
-import sys
-
 from pgx.experimental import auto_reset  # type: ignore
+
 from hashes import LCGHash, SimHash, XXHash
 from network import EpistemicAZNet, MinatarEpistemicAZNet
-import jit_env
 
 # import wrappers
 
