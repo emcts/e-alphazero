@@ -302,7 +302,9 @@ def selfplay(
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
         selfplay_beta = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta, lambda: 0.0)
-        policy_logits = jax.lax.cond(config.directed_exploration, lambda: exploration_logits, lambda: _exploitation_logits)
+        policy_logits = jax.lax.cond(
+            config.directed_exploration, lambda: exploration_logits, lambda: _exploitation_logits
+        )
 
         root = emctx.EpistemicRootFnOutput(
             prior_logits=policy_logits,  # type: ignore
@@ -651,11 +653,13 @@ def main() -> None:
     if config.min_replay_buffer_length < config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay:
         config.min_replay_buffer_length = config.reanalyze_batch_size * config.reanalyze_loops_per_selfplay
 
-    assert config.min_replay_buffer_length < config.max_replay_buffer_length, f"max_replay_buffer_length must be > " \
-                                                                              f"min_replay_buffer_length and isn't. \n" \
-                                                                              f"max_replay_buffer_length = " \
-                                                                              f"{config.min_replay_buffer_length}, and " \
-                                                                              f"min_replay_buffer_length = {config.min_replay_buffer_length}, "
+    assert config.min_replay_buffer_length < config.max_replay_buffer_length, (
+        f"max_replay_buffer_length must be > "
+        f"min_replay_buffer_length and isn't. \n"
+        f"max_replay_buffer_length = "
+        f"{config.min_replay_buffer_length}, and "
+        f"min_replay_buffer_length = {config.min_replay_buffer_length}, "
+    )
 
     print(f"Printing the config:\n{config}", flush=True)
 
