@@ -175,6 +175,7 @@ class XXHash(hk.Module):
         batch_size = x.shape[0]
         x = jax.lax.bitcast_convert_type(x, jnp.uint32)
         # Assumption/simplification: data is a multiple of 4.
+        # TODO: Pad data so that it is a multiple of 4 or implement it like described in the docs.
         x = jnp.reshape(x, [batch_size, 4, -1])  # x: [batch_size, 4, L]
         x = jnp.swapaxes(x, 0, 2)  # x: [L, 4, batch_size]
         input_length = x.shape[0]  # = L
