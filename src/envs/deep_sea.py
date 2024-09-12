@@ -1,10 +1,8 @@
-from typing import Literal
-from dataclasses import dataclass
-
+import chex
 import jax
 import jax.numpy as jnp
 import pgx  # type: ignore
-import chex
+from pgx._src.struct import dataclass  # type: ignore
 
 ENV_ID = "deep_sea"
 
@@ -14,7 +12,7 @@ ENV_ID = "deep_sea"
 
 @dataclass
 class DeepSeaState(pgx.State):
-    observation: jax.Array  # The shape depends on the size of the grid.
+    observation: jax.Array = jnp.zeros(0, dtype=jnp.bool)  # The shape depends on the size of the grid.
     current_player: jax.Array = jnp.int32(0)
     rewards: jax.Array = jnp.float32([0.0])
     terminated: jax.Array = jnp.bool(False)
@@ -37,7 +35,7 @@ class DeepSea(pgx.Env):
 
     def _init(self, key: chex.PRNGKey) -> DeepSeaState:
         observation = jnp.zeros([self.size_of_grid, self.size_of_grid], dtype=jnp.bool)
-        observation[0][0] = True  # Initial location is in the top-left.
+        observation = observation.at[..., 0, 0].set(True)  # Initial location is in the top-left.
         return DeepSeaState(observation=observation)
 
     def _step(self, state: DeepSeaState, action: jax.Array, key: chex.PRNGKey) -> DeepSeaState:
@@ -49,11 +47,15 @@ class DeepSea(pgx.Env):
         # Observation is just False everywhere except the position.
         observation = jnp.zeros_like(state.observation)
         # _step_count determines depth (it is incremented in the parent function).
-        observation[:, state._step_count, horizontal_position] = 1
+        observation = observation.at[..., state._step_count, horizontal_position].set(True)
         # Terminate once we reach the bottom.
         terminated = state._step_count >= self.size_of_grid
         # Boolean rewards will be automatically cast to floats when used.
-        rewards = terminated & (horizontal_position == self.size_of_grid - 1)
+        rewards = (
+            (terminated & (horizontal_position == self.size_of_grid - 1))
+            .reshape(state.rewards.shape)
+            .astype(state.rewards.dtype)
+        )
         return state.replace(  # type: ignore
             observation=observation, _horizontal_position=horizontal_position, rewards=rewards, terminated=terminated
         )
