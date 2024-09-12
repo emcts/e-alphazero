@@ -23,7 +23,7 @@ from pgx.experimental import auto_reset  # type: ignore
 
 from envs.deep_sea import DeepSea
 from hashes import LCGHash, SimHash, XXHash
-from network import EpistemicAZNet, MinatarEpistemicAZNet
+from network import EpistemicAZNet, FullyConnectedAZNet, MinatarEpistemicAZNet
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
@@ -135,26 +135,26 @@ class SelfplayOutput(NamedTuple):
     q_values_epistemic_variance: chex.Array
 
 
-def make_envs(env_class: str, env_id: str, truncation_length: int):
-    selfplay_env, planner_env, eval_env = None, None, None
-    match env_class:
-        case "pgx":
-            selfplay_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
-            planner_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
-            eval_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
-        case "jumanji":
-            raise NotImplementedError(f"jumanji is not yet implemented")
-        case "brax":
-            raise NotImplementedError(f"brax is not yet implemented")
+# def make_envs(env_class: str, env_id: str, truncation_length: int):
+#     selfplay_env, planner_env, eval_env = None, None, None
+#     match env_class:
+#         case "pgx":
+#             selfplay_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+#             planner_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+#             eval_env = wrappers.PGXWrapper(pgx.make(name))  # type: ignore
+#         case "jumanji":
+#             raise NotImplementedError(f"jumanji is not yet implemented")
+#         case "brax":
+#             raise NotImplementedError(f"brax is not yet implemented")
 
-    selfplay_env = jit_env.wrappers.AutoReset(
-        wrappers.TimeoutWrapper(selfplay_env, truncation_length, terminate_on_timeout=False)
-    )
-    planner_env = wrappers.TimeoutWrapper(planner_env, int(1e9), False)
+#     selfplay_env = jit_env.wrappers.AutoReset(
+#         wrappers.TimeoutWrapper(selfplay_env, truncation_length, terminate_on_timeout=False)
+#     )
+#     planner_env = wrappers.TimeoutWrapper(planner_env, int(1e9), False)
 
-    selfplay_env = wrappers.AddObservationToState(selfplay_env)
-    planner_env = wrappers.AddObservationToState(planner_env)
-    return selfplay_env, planner_env, eval_env
+#     selfplay_env = wrappers.AddObservationToState(selfplay_env)
+#     planner_env = wrappers.AddObservationToState(planner_env)
+#     return selfplay_env, planner_env, eval_env
 
 
 def get_network(env: pgx.Env, config: Config) -> hk.Module:
@@ -177,12 +177,12 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             hash_class=hash_class,
         )
     else:
-        # TODO: Get hyper-parameters from config
-        return EpistemicAZNet(
+        # TODO: Add missing hyper-params to config (e.g. hash_bits, hidden_layers, etc.)
+        # TODO: Set the hyperparameters here correctly
+        return FullyConnectedAZNet(
             num_actions=env.num_actions,
+            discount=config.discount,
             hash_class=hash_class,
-            # num_hidden_layers=config.hidden_layers,
-            # layer_size=config.linear_layer_size,
         )
 
 
