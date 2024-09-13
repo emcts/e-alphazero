@@ -44,11 +44,11 @@ class EpistemicAZNet(hk.Module):
     def __init__(
         self,
         num_actions,
-        num_channels: int = 16,  # FIXME: Make 64 again
-        num_blocks: int = 2,  # FIXME: Make 5 again
+        num_channels: int = 64,
+        num_blocks: int = 5,
         resnet_v2: bool = True,
         hash_class: Type = SimHash,
-        max_u: float = jnp.inf,
+        max_u: float = 1.0, # assumes boardgame
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_args: dict[str, Any] | None = None,
@@ -91,7 +91,8 @@ class EpistemicAZNet(hk.Module):
         main_policy_logits = hk.Linear(self.num_actions)(main_policy_logits)
 
         # exploration policy head
-        exploration_policy_logits = hk.Conv2D(output_channels=2, kernel_shape=1)(x1)
+        exploration_policy_logits = jax.lax.stop_gradient(x1)
+        exploration_policy_logits = hk.Conv2D(output_channels=2, kernel_shape=1)(exploration_policy_logits)
         exploration_policy_logits = hk.BatchNorm(True, True, 0.9)(
             exploration_policy_logits, is_training, test_local_stats
         )
@@ -111,14 +112,15 @@ class EpistemicAZNet(hk.Module):
         v = v.reshape((-1,))
 
         # ube head
-        u = hk.Conv2D(output_channels=1, kernel_shape=1)(x1)
+        u = jax.lax.stop_gradient(x1)
+        u = hk.Conv2D(output_channels=1, kernel_shape=1)(u)
         u = hk.BatchNorm(True, True, 0.9)(u, is_training, test_local_stats)
         u = jax.nn.relu(u)
         u = hk.Flatten()(u)
         u = hk.Linear(self.num_channels)(u)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
-        u = jnp.exp2(u)
+        u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))
 
         # local uncertainty
@@ -126,6 +128,7 @@ class EpistemicAZNet(hk.Module):
         scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
+            u = u * self.max_u
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
             u.clip(min=0, max=self.max_u)
@@ -133,7 +136,7 @@ class EpistemicAZNet(hk.Module):
         if update_hash:
             hash_obj.update(x)
 
-        return main_policy_logits, exploration_policy_logits, v, u, jnp.zeros_like(v)
+        return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
 
 
 class MinatarEpistemicAZNet(hk.Module):
@@ -151,7 +154,7 @@ class MinatarEpistemicAZNet(hk.Module):
         num_actions,
         num_channels: int = 16,
         hidden_layers_size: int = 64,
-        max_u: float = jnp.inf,
+        max_u: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
@@ -220,14 +223,17 @@ class MinatarEpistemicAZNet(hk.Module):
         u = hk.Linear(self.hidden_layers_size)(x2)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
-        u = jnp.exp2(u)
+        # Note that u is a scalar between 0 and 1, 1 representing max unc. This is done for stability and learning speed
+        u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        scaled_state_novelty = (~hash_obj(jax.lax.stop_gradient(x))) * self.max_reward_epistemic_variance
+        scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
+            # We need to rescale u to the right output scale
+            u = u * self.max_u
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
             u = u.clip(min=0, max=self.max_u)
@@ -246,7 +252,7 @@ class FullyConnectedAZNet(hk.Module):
         num_actions,
         num_hidden_layers: int = 3,
         layer_size: int = 64,
-        max_u: float = jnp.inf,
+        max_u: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
@@ -268,25 +274,24 @@ class FullyConnectedAZNet(hk.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         # body
         x = x.astype(jnp.float32)
-        original_input = x
-        for i in range(self.num_hidden_layers):
-            x = hk.Linear(self.hidden_layer_size)(x)
-            x = jax.nn.relu(x)
+        x = hk.Flatten()(x)
 
         # value head
-        v = hk.Flatten()(x)
-        v = hk.Linear(self.hidden_layer_size)(v)
+        v = hk.Linear(256)(x)
+        v = jax.nn.relu(v)
+        v = hk.Linear(256)(v)
         v = jax.nn.relu(v)
         v = hk.Linear(1)(v)
         v = jnp.tanh(v)
         v = v.reshape((-1,))
 
         # ube head
-        u = hk.Flatten()(x)
-        u = hk.Linear(self.hidden_layer_size)(u)
+        u = hk.Linear(256)(x)
+        u = jax.nn.relu(u)
+        u = hk.Linear(256)(u)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
-        u = jnp.exp2(u)
+        u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))
 
         # exploitation_policy head
@@ -303,14 +308,15 @@ class FullyConnectedAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        scaled_state_novelty = (~hash_obj(jax.lax.stop_gradient(original_input))) * self.max_reward_epistemic_variance
+        scaled_state_novelty = ~hash_obj(x) * self.max_reward_epistemic_variance
 
         if not is_training:
+            u = u * self.max_u
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
-            u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
+            u = jnp.maximum(scaled_state_novelty, u)
             u = u.clip(min=0, max=self.max_u)
 
         if update_hash:
-            hash_obj.update(original_input)
+            hash_obj.update(x)
 
         return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty
