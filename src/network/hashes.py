@@ -3,6 +3,9 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
+from type_aliases import Observation, Array
+import chex
+
 
 # We can't actually use this for inheritance, but we can still reuse the functions.
 class BaseHash(ABC):
@@ -15,15 +18,16 @@ class BaseHash(ABC):
     bits_per_hash: int
 
     @abstractmethod
-    def get_indices(self, x) -> jax.Array: ...
+    def get_indices(self, x: Observation) -> Array: ...
 
-    def get_byte_and_bit_indices(self, x) -> tuple[jax.Array, jax.Array]:
+    def get_byte_and_bit_indices(self, x: Observation) -> tuple[Array, Array]:
         indices = self.get_indices(x)
         byte_indices = (indices // 8).astype(jnp.uint32)
         bit_indices = (indices % 8).astype(jnp.uint8)
         return byte_indices, bit_indices
 
-    def __call__(self, x) -> jax.Array:
+    def __call__(self, x: Observation) -> Array:
+        chex.assert_axis_dimension_gt(x, 0, 0)  # Check that batch dimension exists.
         binary_set = self.get_binary_set()
         byte_indices, bit_indices = self.get_byte_and_bit_indices(x)
         # bytes_from_set: [batch_size]
@@ -33,12 +37,12 @@ class BaseHash(ABC):
 
         return seen
 
-    def get_binary_set(self) -> jax.Array:
+    def get_binary_set(self) -> Array:
         return hk.get_state(
             "binary_set", [2 ** (self.bits_per_hash - 3)], dtype=jnp.uint8, init=hk.initializers.Constant(0)
         )
 
-    def update(self, x) -> None:
+    def update(self, x: Observation) -> None:
         binary_set = self.get_binary_set()
         byte_indices, bit_indices = self.get_byte_and_bit_indices(x)
         new_bytes = binary_set[byte_indices] | (1 << bit_indices)
@@ -69,7 +73,7 @@ class LCGHash(hk.Module):
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
-    def get_indices(self, x) -> jax.Array:
+    def get_indices(self, x: Observation) -> Array:
         # TODO: Maybe try larger constants later
         # REMINDER: Set environment variable JAX_ENABLE_X64=True
         # FIXME: Setting the environment variable makes pgx break...
@@ -113,9 +117,9 @@ class SimHash(hk.Module):
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
-    def get_indices(self, x) -> jax.Array:
+    def get_indices(self, x: Observation) -> Array:
         # x: [batch_size, vector_size]
-        x = jnp.reshape(x, (x.shape[0], -1))
+        x = jnp.reshape(x, (x.shape[0], -1))  # type: ignore
         vector_size = x.shape[-1]
 
         # random_matrix: [vector_size, bits]
@@ -155,7 +159,7 @@ class XXHash(hk.Module):
     get_binary_set = BaseHash.get_binary_set
     update = BaseHash.update
 
-    def get_indices(self, x) -> jax.Array:
+    def get_indices(self, x: Observation) -> Array:
         # https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#overview
         PRIME_1 = jnp.uint32(0x9E3779B1)  # 0b10011110001101110111100110110001
         PRIME_2 = jnp.uint32(0x85EBCA77)  # 0b10000101111010111100101001110111
@@ -165,11 +169,11 @@ class XXHash(hk.Module):
         SEED = jnp.uint32(1)  # Optional, can be zero
         BITS = 32
 
-        def rotate_left(x: jax.Array, n: int) -> jax.Array:
+        def rotate_left(x: Array, n: int) -> Array:
             return (x << n) | (x >> (BITS - n))
 
         # https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#step-2-process-stripes
-        def round(acc: jax.Array, lane: jax.Array) -> jax.Array:
+        def round(acc: Array, lane: Array) -> Array:
             # acc, lane, return: [4, batch_size]
             acc = acc + (lane * PRIME_2)
             acc = rotate_left(acc, 13)
@@ -177,13 +181,13 @@ class XXHash(hk.Module):
             return acc
 
         # https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#step-3-accumulator-convergence
-        def convergence(acc: jax.Array) -> jax.Array:
+        def convergence(acc: Array) -> Array:
             # acc: [4, batch_size]
             # return: [batch_size]
             return rotate_left(acc[0], 1) + rotate_left(acc[1], 7) + rotate_left(acc[2], 12) + rotate_left(acc[3], 18)
 
         # https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#step-6-final-mix-avalanche
-        def avalanche(acc: jax.Array) -> jax.Array:
+        def avalanche(acc: Array) -> Array:
             # acc, return: [batch_size]
             acc = acc ^ (acc >> 15)
             acc = acc * PRIME_2
@@ -192,17 +196,18 @@ class XXHash(hk.Module):
             acc = acc ^ (acc >> 16)
             return acc
 
-        def loop_fn(acc: jax.Array, stripe: jax.Array) -> tuple[jax.Array, None]:
+        def loop_fn(acc: Array, stripe: Array) -> tuple[Array, None]:
             # acc, stripe: [4, batch_size]
             # return: ([4, batch_size], None)
             acc = round(acc, stripe)
             return acc, None
 
         # Convert input to 4 lanes of u32 (per batch element).
-        batch_size = x.shape[0]
+        batch_size = x.shape[0]  # type: ignore
         x = jax.lax.bitcast_convert_type(x, jnp.uint32)
         # Assumption/simplification: data is a multiple of 4.
         # TODO: Pad data so that it is a multiple of 4 or implement consuming the remainder like described in the docs.
+        chex.assert_is_divisible(x.size / batch_size, 4)
         x = jnp.reshape(x, [batch_size, 4, -1])  # x: [batch_size, 4, L]
         x = jnp.swapaxes(x, 0, 2)  # x: [L, 4, batch_size]
         input_length = x.shape[0]  # = L

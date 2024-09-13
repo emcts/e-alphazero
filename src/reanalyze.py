@@ -105,6 +105,6 @@ def reanalyze(
         next_observation=next_states.observation,  # FIXME: This could be initial state from next episode
         value_target=value_target,
         ube_target=rescaled_ube_target,
-        exploitation_policy_target=policy_output.action_weights,
+        exploitation_policy_target=policy_output.action_weights,  # type: ignore
         exploration_policy_target=exploration_policy_target,
     )

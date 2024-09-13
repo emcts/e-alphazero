@@ -5,14 +5,15 @@ import jax
 import jax.numpy as jnp
 
 from network.hashes import SimHash
+from type_aliases import Array, Observation, NetworkOutput
 
 
 class BlockV1(hk.Module):
-    def __init__(self, num_channels, name="BlockV1"):
+    def __init__(self, num_channels: int, name="BlockV1"):
         super(BlockV1, self).__init__(name=name)
         self.num_channels = num_channels
 
-    def __call__(self, x, is_training, test_local_stats):
+    def __call__(self, x: Array, is_training: bool, test_local_stats: bool):
         i = x
         x = hk.Conv2D(self.num_channels, kernel_shape=3)(x)
         x = hk.BatchNorm(True, True, 0.9)(x, is_training, test_local_stats)
@@ -23,11 +24,11 @@ class BlockV1(hk.Module):
 
 
 class BlockV2(hk.Module):
-    def __init__(self, num_channels, name="BlockV2"):
+    def __init__(self, num_channels: int, name="BlockV2"):
         super(BlockV2, self).__init__(name=name)
         self.num_channels = num_channels
 
-    def __call__(self, x, is_training, test_local_stats):
+    def __call__(self, x: Array, is_training: bool, test_local_stats: bool):
         i = x
         x = hk.BatchNorm(True, True, 0.9)(x, is_training, test_local_stats)
         x = jax.nn.relu(x)
@@ -67,8 +68,8 @@ class EpistemicResidualAZNet(hk.Module):
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
 
     def __call__(
-        self, x, is_training, test_local_stats, update_hash: bool = False
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        self, x: Observation, is_training: bool, test_local_stats: bool, update_hash: bool = False
+    ) -> NetworkOutput:
         x = x.astype(jnp.float32)
         x1 = hk.Conv2D(self.num_channels, kernel_shape=3)(x)
 

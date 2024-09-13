@@ -1,9 +1,18 @@
+import chex
 import haiku as hk
 import jax
-import chex
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
 
-Array = chex.Array
+Array = jax.Array
 PRNGKey = chex.PRNGKey
+
+Observation = Array
+
+Value = Array
+ValueVariance = Array
+ExploitationPolicy = Array
+ExplorationPolicy = Array
+RewardVariance = Array
+NetworkOutput = tuple[Value, ValueVariance, ExploitationPolicy, ExplorationPolicy, RewardVariance]

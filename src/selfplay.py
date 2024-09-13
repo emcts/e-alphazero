@@ -4,9 +4,9 @@ from typing import NamedTuple
 import chex
 import emctx
 import jax
+import jax.numpy as jnp
 import pgx
 from pgx.experimental import auto_reset  # type: ignore
-import jax.numpy as jnp
 
 from config import Config
 from context import Context
@@ -30,7 +30,7 @@ def selfplay(
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
     num_actions = context.env.num_actions
 
-    def step_fn(states: pgx.State, key: chex.PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
+    def step_fn(states: pgx.State, key: PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
         key1, key2, key3, key4 = jax.random.split(key, num=4)
 
         (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
@@ -79,11 +79,11 @@ def selfplay(
         next_state = jax.vmap(auto_reset(context.env.step, context.env.init))(states, chosen_action, keys)
         return next_state, SelfplayOutput(
             state=next_state,
-            root_value=root_values,
-            root_epistemic_std=root_epistemic_stds,
+            root_value=root_values,  # type: ignore
+            root_epistemic_std=root_epistemic_stds,  # type: ignore
             value_prediction=value,
             ube_prediction=value_epistemic_variance,
-            q_values_epistemic_variance=search_summary.qvalues_epistemic_variance,
+            q_values_epistemic_variance=search_summary.qvalues_epistemic_variance,  # type: ignore
         )
 
     rng_key, sub_key = jax.random.split(rng_key)

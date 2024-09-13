@@ -4,23 +4,22 @@ import jax.numpy as jnp
 import pgx  # type: ignore
 from pgx._src.struct import dataclass  # type: ignore
 
+from type_aliases import Array, PRNGKey
+
 ENV_ID = "deep_sea"
-
-
-# https://github.com/google-deepmind/bsuite/blob/main/bsuite/environments/deep_sea.py
 
 
 @dataclass
 class DeepSeaState(pgx.State):
-    observation: jax.Array = jnp.zeros(0, dtype=jnp.bool)  # The shape depends on the size of the grid.
-    current_player: jax.Array = jnp.int32(0)
-    rewards: jax.Array = jnp.float32([0.0])
-    terminated: jax.Array = jnp.bool(False)
-    truncated: jax.Array = jnp.bool(False)
-    legal_action_mask: jax.Array = jnp.ones(2, dtype=jnp.bool)
+    observation: Array = jnp.zeros(0, dtype=jnp.bool)  # The shape depends on the size of the grid.
+    current_player: Array = jnp.int32(0)
+    rewards: Array = jnp.float32([0.0])
+    terminated: Array = jnp.bool(False)
+    truncated: Array = jnp.bool(False)
+    legal_action_mask: Array = jnp.ones(2, dtype=jnp.bool)
 
-    _step_count: jax.Array = jnp.int32(0)
-    _horizontal_position: jax.Array = jnp.int32(0)  # 0 means left-most
+    _step_count: Array = jnp.int32(0)  # how many steps have been taken = depth of submarine
+    _horizontal_position: Array = jnp.int32(0)  # 0 means left-most
 
     @property
     def env_id(self) -> pgx.EnvId:
@@ -29,7 +28,13 @@ class DeepSeaState(pgx.State):
 
 
 class DeepSea(pgx.Env):
-    def __init__(self, size_of_grid: int = 4, action_map_key: chex.PRNGKey | None = None) -> None:
+    """
+    Deep Sea environment.
+
+    Reference definition: https://github.com/google-deepmind/bsuite/blob/main/bsuite/environments/deep_sea.py#L18-L34
+    """
+
+    def __init__(self, size_of_grid: int = 4, action_map_key: PRNGKey | None = None) -> None:
         """
         size_of_grid:
             Deep Sea grid will be `size_of_grid X size_of_grid`
@@ -46,12 +51,12 @@ class DeepSea(pgx.Env):
         if action_map_key is not None:
             self.action_map = jax.random.bernoulli(action_map_key, shape=self.action_map.shape) > 0
 
-    def _init(self, key: chex.PRNGKey) -> DeepSeaState:
+    def _init(self, key: PRNGKey) -> DeepSeaState:
         observation = jnp.zeros([self.size_of_grid, self.size_of_grid], dtype=jnp.bool)
         observation = observation.at[..., 0, 0].set(True)  # Initial location is in the top-left.
         return DeepSeaState(observation=observation)
 
-    def _step(self, state: DeepSeaState, action: jax.Array, key: chex.PRNGKey) -> DeepSeaState:
+    def _step(self, state: DeepSeaState, action: Array, key: PRNGKey) -> DeepSeaState:
         assert isinstance(state, DeepSeaState)
         # Action XOR action_flip determines whether to shift horizontal position left (-1) or right (+1).
         action_flip = self.action_map[..., state._step_count - 1, state._horizontal_position]
@@ -75,7 +80,7 @@ class DeepSea(pgx.Env):
             observation=observation, _horizontal_position=horizontal_position, rewards=rewards, terminated=terminated
         )
 
-    def _observe(self, state: pgx.State, player_id: jax.Array) -> jax.Array:
+    def _observe(self, state: pgx.State, player_id: Array) -> Array:
         assert isinstance(state, DeepSeaState)
         return state.observation
 

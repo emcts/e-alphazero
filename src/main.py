@@ -16,13 +16,12 @@ import pgx  # type: ignore
 import wandb
 from pgx.experimental import auto_reset  # type: ignore
 
-from envs.deep_sea import DeepSea
-
-from evaluate import evaluate
-from selfplay import selfplay, uniformrandomplay
-from reanalyze import reanalyze
 from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
+from envs.deep_sea import DeepSea
+from evaluate import evaluate
+from reanalyze import reanalyze
+from selfplay import selfplay, uniformrandomplay
 from train import train
 
 

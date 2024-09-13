@@ -7,19 +7,19 @@ import pgx  # type: ignore
 
 from config import Config
 from context import Context
-from type_aliases import Model, PRNGKey
+from type_aliases import Array, Model, PRNGKey
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
-def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -> jax.Array:
+def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -> Array:
     model_params, model_state = model
     batch_size = config.num_eval_episodes // len(context.devices)
 
-    def cond_fn(tup: tuple[pgx.State, PRNGKey, jax.Array]) -> bool:
+    def cond_fn(tup: tuple[pgx.State, PRNGKey, Array]) -> bool:
         states, _, _ = tup
         return ~states.terminated.all()
 
-    def loop_fn(tup: tuple[pgx.State, PRNGKey, jax.Array]) -> tuple[pgx.State, PRNGKey, jax.Array]:
+    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array]) -> tuple[pgx.State, PRNGKey, Array]:
         states, rng_key, sum_of_rewards = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 

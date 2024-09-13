@@ -12,7 +12,7 @@ from network.fully_connected import EpistemicFullyConnectedAZNet
 from network.hashes import LCGHash, SimHash, XXHash
 from network.minatar import EpistemicMinatarAZNet
 from network.resnet import EpistemicResidualAZNet
-from type_aliases import Array, ForwardFn, Model, PRNGKey
+from type_aliases import Array, ForwardFn, Model, NetworkOutput, Observation, PRNGKey
 
 
 class Context(NamedTuple):
@@ -76,9 +76,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
 
 # Set up the training model and optimizer.
 def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
-    def forward_fn(
-        x, is_training: bool = True, update_hash: bool = False
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    def forward_fn(x: Observation, is_training: bool = True, update_hash: bool = False) -> NetworkOutput:
         net = get_network(env, config)
         (
             exploitation_policy_logits,

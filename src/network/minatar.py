@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from network.hashes import SimHash
+from type_aliases import Observation, NetworkOutput
 
 
 class EpistemicMinatarAZNet(hk.Module):
@@ -49,8 +50,8 @@ class EpistemicMinatarAZNet(hk.Module):
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
 
     def __call__(
-        self, x, is_training, test_local_stats, update_hash: bool = False
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        self, x: Observation, is_training: bool, test_local_stats: bool, update_hash: bool = False
+    ) -> NetworkOutput:
         x = x.astype(jnp.float32)
 
         # Exploitation net body
