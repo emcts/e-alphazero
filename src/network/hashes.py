@@ -6,8 +6,13 @@ import jax.numpy as jnp
 
 # We can't actually use this for inheritance, but we can still reuse the functions.
 class BaseHash(ABC):
-    def __init__(self, bits_per_hash: int):
-        self.bits_per_hash = bits_per_hash
+    """Abstract class for other hashes.
+    Other hashes don't actually inherit from this class because it is not compatible with `hk.Module`,
+    but they do reuse this class's methods. This class exists only to group the common functions together
+    in a more recognizable form.
+    """
+
+    bits_per_hash: int
 
     @abstractmethod
     def get_indices(self, x) -> jax.Array: ...
@@ -41,8 +46,15 @@ class BaseHash(ABC):
         hk.set_state("binary_set", binary_set)
 
 
-# https://stackoverflow.com/a/77213071
 class LCGHash(hk.Module):
+    """
+    Hash using a Linear Congruential Generator (LCG).
+
+    Based on a StackOverflow answer by Mateen Ulhaq: https://stackoverflow.com/a/77213071
+
+    **CURRENTLY BROKEN.**
+    """
+
     def __init__(
         self,
         bits_per_hash: int = 24,
@@ -82,6 +94,15 @@ class LCGHash(hk.Module):
 
 
 class SimHash(hk.Module):
+    """
+    Locality-sensitive hash which measures similarity by angular distance.
+    The probability that any two particular bits from the hashes of two different
+    state vectors is proportional to the angle between the vectors.
+
+    SimHash theory (see Section 3): https://www.cs.princeton.edu/courses/archive/spring04/cos598B/bib/CharikarEstim.pdf
+    Use for exploration (#-Exploration): https://arxiv.org/abs/1611.04717
+    """
+
     def __init__(self, bits_per_hash: int = 24, name="sim_hash"):
         super().__init__(name=name)
         assert 0 < bits_per_hash <= 32
@@ -114,10 +135,16 @@ class SimHash(hk.Module):
         return jnp.sum(masked_powers, axis=1)
 
 
-# https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#xxh32-algorithm-description
-# https://create.stephan-brumme.com/xxhash/
-# https://github.com/google/jax/discussions/10475#discussioncomment-2656590
 class XXHash(hk.Module):
+    """
+    An implementation of xxHash32, a fast non-cryptographic hash algorithm.
+
+    Website: https://xxhash.com/
+    Algorithm description: https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#xxh32-algorithm-description
+    Simple C++ implementation and explanation: https://create.stephan-brumme.com/xxhash/
+    A reference Jax implementation: https://github.com/google/jax/discussions/10475#discussioncomment-2656590
+    """
+
     def __init__(self, bits_per_hash: int = 24, name="xxhash32"):
         super().__init__(name=name)
         assert 0 < bits_per_hash <= 32
@@ -175,7 +202,7 @@ class XXHash(hk.Module):
         batch_size = x.shape[0]
         x = jax.lax.bitcast_convert_type(x, jnp.uint32)
         # Assumption/simplification: data is a multiple of 4.
-        # TODO: Pad data so that it is a multiple of 4 or implement it like described in the docs.
+        # TODO: Pad data so that it is a multiple of 4 or implement consuming the remainder like described in the docs.
         x = jnp.reshape(x, [batch_size, 4, -1])  # x: [batch_size, 4, L]
         x = jnp.swapaxes(x, 0, 2)  # x: [L, 4, batch_size]
         input_length = x.shape[0]  # = L

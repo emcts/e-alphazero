@@ -22,8 +22,10 @@ import wandb
 from pgx.experimental import auto_reset  # type: ignore
 
 from envs.deep_sea import DeepSea
-from hashes import LCGHash, SimHash, XXHash
-from network import EpistemicAZNet, FullyConnectedAZNet, MinatarEpistemicAZNet
+from network.hashes import LCGHash, SimHash, XXHash
+from network.fully_connected import EpistemicFullyConnectedAZNet
+from network.resnet import EpistemicResidualAZNet
+from network.minatar import EpistemicMinatarAZNet
 
 ForwardFn = hk.TransformedWithState
 Model = tuple[hk.MutableParams, hk.MutableState]
@@ -170,7 +172,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
         case "XXHash":
             hash_class = XXHash
     if "minatar" in config.env_id:
-        return MinatarEpistemicAZNet(
+        return EpistemicMinatarAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
             max_u=config.max_ube,
@@ -180,7 +182,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             max_epistemic_variance_reward=config.max_epistemic_variance_reward,
         )
     elif "deep_sea" in config.env_id:
-        return FullyConnectedAZNet(
+        return EpistemicFullyConnectedAZNet(
             num_actions=env.num_actions,
             discount=config.discount,
             hash_class=hash_class,
@@ -190,7 +192,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
     else:
         # TODO: Add missing hyper-params to config (e.g. hash_bits, hidden_layers, etc.)
         # TODO: Set the hyperparameters here correctly
-        return EpistemicAZNet(
+        return EpistemicResidualAZNet(
             num_actions=env.num_actions,
             discount=config.discount,
             hash_class=hash_class,
@@ -202,7 +204,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
 # Set up the training model and optimizer.
 def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
     def forward_fn(
-            x, is_training: bool = True, update_hash: bool = False
+        x, is_training: bool = True, update_hash: bool = False
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         net = get_network(env, config)
         (
@@ -226,18 +228,18 @@ def get_forward_fn(env: pgx.Env, config: Config) -> ForwardFn:
 
 
 def get_epistemic_recurrent_fn(
-        env: pgx.Env,
-        forward: ForwardFn,
-        batch_size: int,
-        exploration: bool,
-        discount: float,
-        two_players_game: bool,
+    env: pgx.Env,
+    forward: ForwardFn,
+    batch_size: int,
+    exploration: bool,
+    discount: float,
+    two_players_game: bool,
 ) -> emctx.EpistemicRecurrentFn:
     def epistemic_recurrent_fn(
-            model: Model,
-            rng_key: chex.PRNGKey,
-            action: chex.Array,
-            state: pgx.State,
+        model: Model,
+        rng_key: chex.PRNGKey,
+        action: chex.Array,
+        state: pgx.State,
     ) -> tuple[emctx.EpistemicRecurrentFnOutput, pgx.State]:
         model_params, model_state = model
 
@@ -301,7 +303,7 @@ def uniformrandomplay(config: Config, context: Context, rng_key: chex.PRNGKey) -
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def selfplay(
-        model: Model, config: Config, context: Context, last_states: pgx.State, rng_key: chex.PRNGKey
+    model: Model, config: Config, context: Context, last_states: pgx.State, rng_key: chex.PRNGKey
 ) -> tuple[pgx.State, SelfplayOutput]:
     model_params, model_state = model
     self_play_batch_size = config.selfplay_batch_size // len(context.devices)
@@ -397,11 +399,11 @@ class ReanalyzeOutput(NamedTuple):
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])
 def reanalyze(
-        model: Model,
-        config: Config,
-        context: Context,
-        experience_pair: fbx.prioritised_flat_buffer.ExperiencePair,
-        rng_key: chex.PRNGKey,
+    model: Model,
+    config: Config,
+    context: Context,
+    experience_pair: fbx.prioritised_flat_buffer.ExperiencePair,
+    rng_key: chex.PRNGKey,
 ) -> ReanalyzeOutput:
     model_params, model_state = model
     states = experience_pair.first
@@ -431,7 +433,8 @@ def reanalyze(
     )
     search_summary = policy_output.search_tree.epistemic_summary()
     value_target = search_summary.qvalues[
-        jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
+        jnp.arange(search_summary.qvalues.shape[0]), policy_output.action
+    ]  # type: ignore
     ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
     rescaled_ube_target = ube_target / config.max_ube
 
@@ -515,8 +518,11 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # The UBE prediction and target need to be rescaled [0,1] -> [0,max] -> sqrt([0,max])
     rescaled_ube_prediction = jnp.sqrt(jnp.abs(value_epistemic_variance) * context.max_ube)
     rescaled_ube_target = jnp.sqrt(jnp.abs(reanalyze_output.ube_target) * context.max_ube)
-    priority_score = jnp.abs(value + error_beta * rescaled_ube_prediction -
-                             (reanalyze_output.value_target + error_beta * rescaled_ube_target))
+    priority_score = jnp.abs(
+        value
+        + error_beta * rescaled_ube_prediction
+        - (reanalyze_output.value_target + error_beta * rescaled_ube_target)
+    )
 
     ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
     ube_loss = jnp.mean(ube_loss)
@@ -531,9 +537,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     )
     exploration_policy_loss = jnp.mean(exploration_policy_loss)
 
-    total_loss = (
-            value_loss + exploitation_policy_loss + exploration_policy_loss + ube_loss
-    )
+    total_loss = value_loss + exploitation_policy_loss + exploration_policy_loss + ube_loss
 
     # Log the policies entropies
     # Compute the probabilities by applying softmax
@@ -630,14 +634,15 @@ def debug_deep_sea(all_states_batch, model, context):
     # print(f"all_states_batch.shape = {all_states_batch.shape}")
     model_params, model_state = model
 
-    (_exploitation_logits, _exploration_logits, _value, value_epistemic_variance,
-     reward_epistemic_variance), _ = (
+    (_exploitation_logits, _exploration_logits, _value, value_epistemic_variance, reward_epistemic_variance), _ = (
         context.forward.apply(model_params, model_state, all_states_batch, is_training=True)
     )
-    ube_predictions = jnp.reshape(value_epistemic_variance,
-                                  shape=(all_states_batch.shape[-1], all_states_batch.shape[-1]))
-    unseen_states = jnp.reshape(reward_epistemic_variance,
-                                shape=(all_states_batch.shape[-1], all_states_batch.shape[-1]))
+    ube_predictions = jnp.reshape(
+        value_epistemic_variance, shape=(all_states_batch.shape[-1], all_states_batch.shape[-1])
+    )
+    unseen_states = jnp.reshape(
+        reward_epistemic_variance, shape=(all_states_batch.shape[-1], all_states_batch.shape[-1])
+    )
     return ube_predictions, unseen_states
 
 
@@ -670,20 +675,23 @@ def setup_config(config: Config) -> Config:
             f"{config.env_id}_beta={config.exploration_beta}_{config.seed}"
             f"_{time.asctime(time.localtime(time.time()))}"
         )
-    config.reanalyze_loops_per_selfplay = max(1, int(
-        config.training_to_interactions_ratio
-        * config.selfplay_steps
-        * config.selfplay_batch_size
-        / config.reanalyze_batch_size
-    ))
+    config.reanalyze_loops_per_selfplay = max(
+        1,
+        int(
+            config.training_to_interactions_ratio
+            * config.selfplay_steps
+            * config.selfplay_batch_size
+            / config.reanalyze_batch_size
+        ),
+    )
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
     if "minatar" in config.env_id:
         if "space_invaders" in config.env_id:
-            config.max_ube = 200 ** 2
+            config.max_ube = 200**2
         else:
-            config.max_ube = 20 ** 2
+            config.max_ube = 20**2
 
     config.exploration_beta = config.exploration_beta if config.directed_exploration else 0.0
     # Make sure min replay buffer length makes sense
@@ -893,10 +901,8 @@ def main() -> None:
 
             if "deep_sea" in config.env_id:
                 ube_predictions, unseen_states = debug_deep_sea(all_states_batch, model, context)
-                print(f"ube_predictions = \n"
-                      f"{ube_predictions}")
-                print(f"unseen_states = \n"
-                      f"{unseen_states}")
+                print(f"ube_predictions = \n" f"{ube_predictions}")
+                print(f"unseen_states = \n" f"{unseen_states}")
                 print(f"Number of seen states: = {(1 - unseen_states).sum().item()}")
 
         frame_diff = config.selfplay_batch_size * config.selfplay_steps
@@ -984,13 +990,13 @@ def main() -> None:
                     "train/value_loss": sum(value_loss_list) / len(value_loss_list),
                     "train/ube_loss": sum(ube_loss_list) / len(ube_loss_list),
                     "train/exploitation_policy_loss": sum(exploitation_policy_loss_list)
-                                                      / len(exploitation_policy_loss_list),
+                    / len(exploitation_policy_loss_list),
                     "train/exploration_policy_loss": sum(exploration_policy_loss_list)
-                                                     / len(exploration_policy_loss_list),
+                    / len(exploration_policy_loss_list),
                     "train/mean_exploitation_policy_entropy": sum(exploitation_policy_entropy_list)
-                                                              / len(exploitation_policy_entropy_list),
+                    / len(exploitation_policy_entropy_list),
                     "train/mean_exploration_policy_entropy": sum(exploration_policy_entropy_list)
-                                                             / len(exploration_policy_entropy_list),
+                    / len(exploration_policy_entropy_list),
                     "hash/set_bits": set_bits,
                     "hash/new_bits_ratio": set_bit_diff / frame_diff,
                     "hash/batch_novelty": sum(batch_novelty_list) / len(batch_novelty_list),
