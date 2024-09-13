@@ -40,6 +40,9 @@ def selfplay(
         policy_logits = jax.lax.cond(
             config.directed_exploration, lambda: exploration_logits, lambda: _exploitation_logits
         )
+        policy_logits = jax.lax.cond(
+            config.uniform_search_policy, lambda: jnp.ones_like(policy_logits), lambda: policy_logits
+        )
 
         root = emctx.EpistemicRootFnOutput(
             prior_logits=policy_logits,  # type: ignore

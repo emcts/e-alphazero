@@ -41,10 +41,11 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
             num_simulations=config.selfplay_simulations_per_step,
             invalid_actions=~states.legal_action_mask,
             qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore
+            gumbel_scale=0.0,
         )
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
-        rewards = states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
+        rewards = next_states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
         return next_states, rng_key, sum_of_rewards + rewards
 
     rng_key, sub_key = jax.random.split(rng_key)

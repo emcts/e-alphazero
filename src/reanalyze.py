@@ -85,7 +85,10 @@ def reanalyze(
     )
     search_summary = policy_output.search_tree.epistemic_summary()
     value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
-    ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
+    exploration_ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
+    exploitation_ube_target = search_summary.qvalues_epistemic_variance[jnp.arange(search_summary.qvalues_epistemic_variance.shape[0]), policy_output.action]
+    chex.assert_equal_shape([exploration_ube_target, exploitation_ube_target])
+    ube_target = jax.lax.cond(config.exploration_ube_target, lambda: exploration_ube_target, lambda: exploitation_ube_target)
     rescaled_ube_target = ube_target / config.max_ube
 
     completed_q_and_std_scores: Array = mask_invalid_actions(

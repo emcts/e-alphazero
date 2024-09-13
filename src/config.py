@@ -26,6 +26,7 @@ class Config(pydantic.BaseModel):
     max_epistemic_variance_reward: float = 1.0
     # UBE parameters
     max_ube: float = 1.0  # If known, the maximum value^2
+    exploration_ube_target: bool = True     # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
     selfplay_simulations_per_step: int = 64
@@ -34,6 +35,7 @@ class Config(pydantic.BaseModel):
     sample_actions: bool = False
     sample_from_improved_policy: bool = False
     rescale_q_values_in_search: bool = True
+    uniform_search_policy: bool = False     # If True, search policy is always uniform in selfplay. Currently only implemented for root
     # reanalyze
     reanalyze_batch_size: int = 4096
     reanalyze_simulations_per_step: int = 32
