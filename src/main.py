@@ -15,6 +15,7 @@ import optax  # type: ignore
 import pgx  # type: ignore
 import wandb
 from pgx.experimental import auto_reset  # type: ignore
+from flashbax.vault import Vault
 
 from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
@@ -117,6 +118,18 @@ def main() -> None:
         priority_exponent=config.priority_exponent,
     )
     buffer_state = buffer_fn.init(jax.tree.map(lambda x: x[0], dummy_state))
+
+    if config.save_replay_buffer:
+        parts = config.replay_buffer_path.split('/')
+        vault_uid = parts[-1]
+        vault_name = parts[-2]
+        rel_dir = '/'.join(parts[:-2]) + '/' if len(parts) > 2 else ''
+        rb_vault = Vault(
+            vault_uid=vault_uid,
+            vault_name=vault_name,
+            experience_structure=buffer_state.experience,
+            rel_dir=rel_dir
+        )
 
     # Prepare checkpoint directory.
     now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -247,6 +260,8 @@ def main() -> None:
         buffer_state = buffer_fn.add(
             buffer_state, jax.tree.map(lambda x: jnp.concatenate(jnp.swapaxes(x, 1, 2)), states)
         )
+        if config.save_replay_buffer:
+            rb_vault.write(buffer_state)
 
         value_loss_list = []
         ube_loss_list = []

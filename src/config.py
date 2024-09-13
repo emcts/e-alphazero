@@ -59,10 +59,13 @@ class Config(pydantic.BaseModel):
     discount: float = 0.997
     # EMCTS exploration parameters
     exploration_beta: Annotated[float, pydantic.Field(strict=True, ge=0.0)] = (
-        0.0  # used in emctx, if > 0 conducts EMCTS exploration.
+        0.0  # used in selfplay in emctx for directed exploration
     )
     exploitation_beta: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
-        0.0  # used in emctx, if > 0 conducts EMCTS exploration.
+        0.0  # used in evaluation in emctx
+    )
+    reanalyze_beta: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
+        0.0  # used in reanalyze in emctx for epistemically reliable targets
     )
     beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
@@ -74,6 +77,9 @@ class Config(pydantic.BaseModel):
     wandb_team_name: str = "emcts"
     # slurm info
     slurm_job_id: int | None = None
+    # Offline-RL
+    save_replay_buffer: bool = False
+    replay_buffer_path: str | None = None   # Must be of structure: path/vault_name/vault_uid
 
     class Config:
         extra = "forbid"

@@ -72,7 +72,7 @@ def reanalyze(
         value=value,  # type: ignore
         value_epistemic_variance=value_epistemic_variance,  # type: ignore
         embedding=states,  # type: ignore
-        beta=jnp.zeros_like(value),  # type: ignore
+        beta=jnp.ones_like(value) * config.reanalyze_beta,  # type: ignore
     )
     policy_output = emctx.epistemic_gumbel_muzero_policy(
         params=model,
