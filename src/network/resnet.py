@@ -4,7 +4,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
-from hashes import SimHash
+from network.hashes import SimHash
 
 
 class BlockV1(hk.Module):
