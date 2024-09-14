@@ -1,8 +1,10 @@
 from functools import partial
 
+import chex
 import jax
 import jax.numpy as jnp
 import optax
+import jax.nn as nn
 
 from context import Context
 from reanalyze import ReanalyzeOutput
@@ -10,7 +12,6 @@ from type_aliases import Model
 
 
 def loss_fn(model_params, model_state, context: Context, reanalyze_output: ReanalyzeOutput):
-    MINIMUM_LOG_UBE_TARGET = -10
     (
         exploitation_logits,
         exploration_logits,
@@ -21,8 +22,24 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
     )
 
+    # Compute losses
+    # TODO: figure out if mask is needed because of episode truncation
     value_loss = optax.l2_loss(value, reanalyze_output.value_target)
-    value_loss = jnp.mean(value_loss)  # TODO: figure out if mask is needed because of episode truncation
+    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
+    exploitation_policy_loss = optax.softmax_cross_entropy(
+        exploitation_logits, reanalyze_output.exploitation_policy_target)
+    exploration_policy_loss = optax.softmax_cross_entropy(
+        exploration_logits, reanalyze_output.exploration_policy_target)
+
+    # Compute loss weights, based on Sunrise, https://arxiv.org/pdf/2007.04938
+    epistemic_loss_weights = 0.5 + nn.sigmoid(-1 * reanalyze_output.ube_target * context.loss_weighting_temperature)
+    epistemic_loss_weights = jax.lax.cond(context.weigh_losses, lambda: epistemic_loss_weights,
+                                          lambda: jnp.ones_like(value_loss))
+
+    chex.assert_equal_shape([ube_loss, value_loss, exploitation_policy_loss, exploration_policy_loss, epistemic_loss_weights])
+
+    total_loss = jnp.mean(epistemic_loss_weights * (value_loss + exploitation_policy_loss +
+                                                    exploration_policy_loss + ube_loss))
 
     # Compute error for priority:
     error_beta = jax.lax.cond(context.exploration_beta > 0.0, lambda: 0.1, lambda: 0.0)
@@ -35,21 +52,6 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         - (reanalyze_output.value_target + error_beta * rescaled_ube_target)
     )
 
-    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
-    ube_loss = jnp.mean(ube_loss)
-
-    exploitation_policy_loss = optax.softmax_cross_entropy(
-        exploitation_logits, reanalyze_output.exploitation_policy_target
-    )
-    exploitation_policy_loss = jnp.mean(exploitation_policy_loss)
-
-    exploration_policy_loss = optax.softmax_cross_entropy(
-        exploration_logits, reanalyze_output.exploration_policy_target
-    )
-    exploration_policy_loss = jnp.mean(exploration_policy_loss)
-
-    total_loss = value_loss + exploitation_policy_loss + exploration_policy_loss + ube_loss
-
     # Log the policies entropies
     # Compute the probabilities by applying softmax
     exploitation_probs = jax.nn.softmax(exploitation_logits, axis=-1)
@@ -58,11 +60,8 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # Compute entropy: -sum(p * log(p))
     mean_exploitation_policy_entropy = -jnp.sum(exploitation_probs * exploitation_log_probs, axis=-1).mean()
 
-    # Compute the probabilities by applying softmax
     exploration_probs = jax.nn.softmax(exploration_logits, axis=-1)
-    # Compute the log-probabilities
     exploration_log_probs = jax.nn.log_softmax(exploration_logits, axis=-1)
-    # Compute entropy: -sum(p * log(p))
     mean_exploration_policy_entropy = -jnp.sum(exploration_probs * exploration_log_probs, axis=-1).mean()
 
     # batch novelty, i.e. how many of these states have we "seen" before.

@@ -29,6 +29,8 @@ class Context(NamedTuple):
     hash_path: str
     exploration_beta: float
     max_ube: float
+    weigh_losses: bool
+    loss_weighting_temperature: float
 
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):

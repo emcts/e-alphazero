@@ -52,6 +52,8 @@ class Config(pydantic.BaseModel):
     learning_rate: float = 0.001
     learning_starts: int = int(5e3)  # While buffer size < learning_starts, executes random actions
     scale_uncertainty_losses: float = 1.0  # Scales the exploration policy and ube head to reduce influence on body
+    weigh_losses: bool = False      # If true, weighs losses with epistemic uncertainty
+    loss_weighting_temperature: float = 10.0    # From Sunrise https://arxiv.org/pdf/2007.04938
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
@@ -108,6 +110,7 @@ def setup_config(config: Config) -> Config:
         config.learning_starts = 256
         config.hash_class = "XXHash"
         config.track = False
+        config.eval_interval = 1
         config.directed_exploration = True
         config.exploration_beta = 10.0
         config.maximum_number_of_iterations = max(

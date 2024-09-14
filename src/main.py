@@ -178,6 +178,8 @@ def main() -> None:
         hash_path=config.hash_path,  # TODO: Automatically figure this out
         exploration_beta=config.exploration_beta,
         max_ube=config.max_ube,
+        weigh_losses=config.weigh_losses,
+        loss_weighting_temperature=config.loss_weighting_temperature
     )
 
     # Training loop
@@ -296,7 +298,8 @@ def main() -> None:
                     jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
                     jax.random.split(subkey, num_devices),
                 )
-                print(f"Max UBE target from reanalyze = {reanalyze_output.ube_target.max().item()}")
+                # Make sure that gradients don't pass through the targets
+                reanalyze_output = jax.tree_util.tree_map(jax.lax.stop_gradient, reanalyze_output)
                 (
                     model,
                     opt_state,
