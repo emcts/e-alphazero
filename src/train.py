@@ -38,8 +38,8 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
 
     chex.assert_equal_shape([ube_loss, value_loss, exploitation_policy_loss, exploration_policy_loss, epistemic_loss_weights])
 
-    total_loss = jnp.mean(epistemic_loss_weights * (value_loss + exploitation_policy_loss +
-                                                    exploration_policy_loss + ube_loss))
+    total_loss = jnp.mean(epistemic_loss_weights * (value_loss + exploitation_policy_loss) +
+                          exploration_policy_loss + ube_loss)
 
     # Compute error for priority:
     error_beta = jax.lax.cond(context.exploration_beta > 0.0, lambda: 0.1, lambda: 0.0)
