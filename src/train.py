@@ -51,6 +51,9 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         + error_beta * rescaled_ube_prediction
         - (reanalyze_output.value_target + error_beta * rescaled_ube_target)
     )
+    # If we use epistemic loss weighting, we should also adjust the priorities
+    priority_score = jax.lax.cond(context.weigh_losses, lambda: priority_score * epistemic_loss_weights,
+                                  lambda: priority_score)
 
     # Log the policies entropies
     # Compute the probabilities by applying softmax
