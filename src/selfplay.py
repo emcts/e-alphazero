@@ -33,12 +33,12 @@ def selfplay(
     def step_fn(states: pgx.State, key: PRNGKey) -> tuple[pgx.State, SelfplayOutput]:
         key1, key2, key3, key4 = jax.random.split(key, num=4)
 
-        (_exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
+        (exploitation_logits, exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
             context.forward.apply(model_params, model_state, states.observation, is_training=False)
         )
         selfplay_beta = jax.lax.cond(config.directed_exploration, lambda: config.exploration_beta, lambda: 0.0)
         policy_logits = jax.lax.cond(
-            config.directed_exploration, lambda: exploration_logits, lambda: _exploitation_logits
+            config.directed_exploration, lambda: exploration_logits, lambda: exploitation_logits
         )
         policy_logits = jax.lax.cond(
             config.uniform_search_policy, lambda: jnp.ones_like(policy_logits), lambda: policy_logits
