@@ -28,7 +28,7 @@ class Context(NamedTuple):
     scale_uncertainty_losses: float
     hash_path: str
     exploration_beta: float
-    max_ube: float
+    value_scale: float
     weigh_losses: bool
     loss_weighting_temperature: float
 
@@ -50,7 +50,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
         return EpistemicMinatarAZNet(
             num_actions=env.num_actions,
             num_channels=config.num_channels,
-            max_u=config.max_ube,
+            value_scale=config.value_scale,
             discount=config.discount,
             hidden_layers_size=config.linear_layer_size,
             hash_class=hash_class,
@@ -61,7 +61,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             num_actions=env.num_actions,
             discount=config.discount,
             hash_class=hash_class,
-            max_u=config.max_ube,
+            value_scale=config.value_scale,
             max_epistemic_variance_reward=config.max_epistemic_variance_reward,
         )
     else:
@@ -71,7 +71,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             num_actions=env.num_actions,
             discount=config.discount,
             hash_class=hash_class,
-            max_u=config.max_ube,
+            value_scale=config.value_scale,
             max_epistemic_variance_reward=config.max_epistemic_variance_reward,
         )
 

@@ -25,12 +25,12 @@ class Config(pydantic.BaseModel):
     hash_path: str = "minatar_az_net/xxhash32"
     max_epistemic_variance_reward: float = 1.0
     # UBE parameters
-    max_ube: float = 1.0  # If known, the maximum value^2
+    value_scale: float = 1.0  # Approximately the maximum value for the environment, used to stabilize the val. function
     exploration_ube_target: bool = True     # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
-    selfplay_simulations_per_step: int = 64
-    selfplay_steps: int = 64
+    selfplay_simulations_per_step: int = 32
+    selfplay_steps: int = 32
     directed_exploration: bool = False  # if true, betaExploration = 0 and uses exploitation policy in selfplay
     sample_actions: bool = False
     sample_from_improved_policy: bool = False
@@ -43,7 +43,7 @@ class Config(pydantic.BaseModel):
         None  # computes as training_to_interactions_ratio * reanalyze_data / selfplay_data
     )
     training_to_interactions_ratio: Annotated[int, pydantic.Field(strict=True, ge=2)] = (
-        2  # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
+        8  # The number of datapoints to see in training compared to acting. Must be >= 2, or only trains on fresh data
     )
     max_replay_buffer_length: int = 1_000_000
     min_replay_buffer_length: int = 256
@@ -57,7 +57,7 @@ class Config(pydantic.BaseModel):
     # checkpoints / eval
     checkpoint_interval: int = 5
     eval_interval: int = 5
-    evaluation_batch: int = 64
+    evaluation_batch: int = 128
     # targets
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
@@ -118,6 +118,10 @@ def setup_config(config: Config) -> Config:
         )
         config.directed_exploration = True
 
+    if "deep_sea" in config.env_id:
+        config.selfplay_steps = 8
+        config.selfplay_batch_size = 16
+
     # Update config with runtime computed values
     if config.auto_seed and config.seed == 0:
         config.seed = random.randint(1, 100000)
@@ -126,6 +130,25 @@ def setup_config(config: Config) -> Config:
             f"{config.env_id}_beta={config.exploration_beta}_{config.seed}"
             f"_{time.asctime(time.localtime(time.time()))}"
         )
+    config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
+    config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
+    config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
+    if "minatar" in config.env_id:
+        if "breakout" in config.env_id:
+            config.value_scale = 40
+        elif "space_invaders" in config.env_id:
+            config.value_scale = 200
+        elif "freeway" in config.env_id:
+            config.value_scale = 60
+        elif "asterix" in config.env_id:
+            config.value_scale = 25
+        elif "seaquest" in config.env_id:
+            config.value_scale = 60
+        else:
+            raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
+    else:
+        config.value_scale = 1.0
+
     config.reanalyze_loops_per_selfplay = max(
         1,
         int(
@@ -135,14 +158,6 @@ def setup_config(config: Config) -> Config:
             / config.reanalyze_batch_size
         ),
     )
-    config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
-    config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
-    config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
-    if "minatar" in config.env_id:
-        if "space_invaders" in config.env_id:
-            config.max_ube = 200**2
-        else:
-            config.max_ube = 20**2
 
     config.exploration_beta = config.exploration_beta if config.directed_exploration else 0.0
     # Make sure min replay buffer length makes sense

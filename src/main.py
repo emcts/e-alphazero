@@ -28,7 +28,6 @@ from train import train
 
 @partial(jax.pmap, static_broadcasted_argnums=[2])
 def debug_deep_sea(all_states_batch, model, context):
-    # print(f"all_states_batch.shape = {all_states_batch.shape}")
     model_params, model_state = model
 
     (_exploitation_logits, _exploration_logits, _value, value_epistemic_variance, reward_epistemic_variance), _ = (
@@ -177,7 +176,7 @@ def main() -> None:
         scale_uncertainty_losses=config.scale_uncertainty_losses,
         hash_path=config.hash_path,  # TODO: Automatically figure this out
         exploration_beta=config.exploration_beta,
-        max_ube=config.max_ube,
+        value_scale=config.value_scale,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature
     )
