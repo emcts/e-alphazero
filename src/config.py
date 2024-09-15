@@ -11,8 +11,7 @@ class Config(pydantic.BaseModel):
 
     # general
     debug: bool = False  # If True, automatically loads much smaller hps to make debugging easier
-    auto_seed: bool = True  # If True and seed == 0, seeds with a random seed
-    seed: int = 0
+    seed: int | None = None     # If None, seeds automatically with a random large integer
     env_class: Literal["pgx", "custom"] = "pgx"
     env_id: pgx.EnvId | str = "minatar-breakout"
     maximum_number_of_iterations: int = 2000
@@ -124,7 +123,7 @@ def setup_config(config: Config) -> Config:
         config.selfplay_batch_size = 16
 
     # Update config with runtime computed values
-    if config.auto_seed and config.seed == 0:
+    if config.seed is None:
         config.seed = random.randint(1, 100000)
     if config.wandb_run_name is None:
         config.wandb_run_name = (
