@@ -17,7 +17,7 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
 
     def cond_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> bool:
         states, _, _, counter = tup
-        return jnp.logical_not(states.terminated.all()) | (counter > config.evaluation_episode_max_length)
+        return jnp.logical_not(states.terminated.all()) & (counter <= config.evaluation_episode_max_length)
 
     def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> tuple[pgx.State, PRNGKey, Array, int]:
         states, rng_key, sum_of_rewards, counter = tup
