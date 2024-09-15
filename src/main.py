@@ -52,7 +52,7 @@ class TimeoutTerminationWrapper(pgx.Env):
         new_state = self.env.step(state, action, key)
         self.step_counter += 1
         if self.step_counter >= self.timelimit:
-            new_state.terminated = True  # Assuming the State has this attribute
+            new_state.terminated = True
 
         return new_state
 
@@ -149,7 +149,10 @@ def main() -> None:
             size_of_grid = int(s) if s.isnumeric() else 4
             env = DeepSea(size_of_grid=size_of_grid, action_map_key=subkey_for_env)
         case ("pgx", env_id) if env_id in pgx.available_envs():
-            env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
+            if "minatar" in env_id:
+                env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
+            else:
+                env = pgx.make(env_id)
         case (cl, id):
             assert False, f"Invalid environment settings: {cl}, {id}."
     # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)

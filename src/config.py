@@ -109,12 +109,7 @@ def setup_config(config: Config) -> Config:
         config.hash_class = "XXHash"
         config.track = False
         config.eval_interval = 1
-        config.directed_exploration = True
-        config.exploration_beta = 10.0
-        config.maximum_number_of_iterations = max(
-            50, int(config.learning_starts / (config.selfplay_steps * config.selfplay_batch_size) + 3)
-        )
-        config.directed_exploration = True
+        config.maximum_number_of_iterations = 50
 
     if "deep_sea" in config.env_id:
         config.selfplay_steps = 8
