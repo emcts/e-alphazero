@@ -17,6 +17,7 @@ class Config(pydantic.BaseModel):
     env_id: pgx.EnvId | str = "minatar-breakout"
     maximum_number_of_iterations: int = 2000
     two_players_game: bool = False
+    max_episode_length: int = 500  # May want to change this per env
     # network
     linear_layer_size: int = 128
     num_channels: int = 16
@@ -74,7 +75,6 @@ class Config(pydantic.BaseModel):
     beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
     num_eval_episodes: int = 32
-    evaluation_episode_max_length: int = 1000   # May want to change this per env
     # wandb params
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
     wandb_project: str = "e-alphazero"
@@ -142,7 +142,7 @@ def setup_config(config: Config) -> Config:
         elif "freeway" in config.env_id:
             config.value_scale = 60
         elif "asterix" in config.env_id:
-            config.value_scale = 25
+            config.value_scale = 50
         elif "seaquest" in config.env_id:
             config.value_scale = 60
         else:

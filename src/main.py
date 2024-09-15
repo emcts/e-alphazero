@@ -4,7 +4,7 @@ import pickle
 import sys
 import time
 from functools import partial
-from typing import Any
+from typing import Any, Optional
 
 import flashbax as fbx  # type: ignore
 import haiku as hk
@@ -24,6 +24,67 @@ from evaluate import evaluate
 from reanalyze import reanalyze
 from selfplay import selfplay, uniformrandomplay
 from train import train
+
+from type_aliases import PRNGKey, Array
+
+class TimeoutTerminationWrapper(pgx.Env):
+    """
+    A wrapper to induce termination on timeout.
+    Automatically supports all methods from the original environment.
+    """
+    def __init__(self, env: pgx.Env, timelimit: int):
+        super().__init__()
+        self.env = env
+        self.timelimit = timelimit
+        self.step_counter = 0
+
+    def init(self, key: PRNGKey) -> pgx.State:
+        state = self.env.init(key)
+        self.step_counter = 0
+        return state
+
+    def step(
+            self,
+            state: pgx.State,
+            action: Array,
+            key: Optional[Array] = None,
+    ) -> pgx.State:
+        new_state = self.env.step(state, action, key)
+        self.step_counter += 1
+        if self.step_counter >= self.timelimit:
+            new_state.terminated = True  # Assuming the State has this attribute
+
+        return new_state
+
+    # Delegate abstract methods to the underlying environment
+    def _init(self, *args, **kwargs):
+        return self.env._init(*args, **kwargs)
+
+    def _observe(self, *args, **kwargs):
+        return self.env._observe(*args, **kwargs)
+
+    def _step(self, *args, **kwargs):
+        return self.env._step(*args, **kwargs)
+
+    @property
+    def id(self):
+        return self.env.id
+
+    @property
+    def num_players(self):
+        return self.env.num_players
+
+    @property
+    def version(self):
+        return self.env.version
+
+    # Delegate other methods/attributes
+    def __getattr__(self, name):
+        """
+        Delegate all other method calls to the wrapped environment.
+        """
+        return getattr(self.env, name)
+
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[2])
@@ -88,7 +149,7 @@ def main() -> None:
             size_of_grid = int(s) if s.isnumeric() else 4
             env = DeepSea(size_of_grid=size_of_grid, action_map_key=subkey_for_env)
         case ("pgx", env_id) if env_id in pgx.available_envs():
-            env = pgx.make(env_id)
+            env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
         case (cl, id):
             assert False, f"Invalid environment settings: {cl}, {id}."
     # selfplay_env, planner_env, eval_env = make_envs(config.env_class, config.env_id)
