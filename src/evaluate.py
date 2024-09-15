@@ -15,12 +15,12 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
     model_params, model_state = model
     batch_size = config.num_eval_episodes // len(context.devices)
 
-    def cond_fn(tup: tuple[pgx.State, PRNGKey, Array]) -> bool:
-        states, _, _ = tup
-        return ~states.terminated.all()
+    def cond_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> bool:
+        states, _, _, counter = tup
+        return jnp.logical_not(states.terminated.all()) | (counter > config.evaluation_episode_max_length)
 
-    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array]) -> tuple[pgx.State, PRNGKey, Array]:
-        states, rng_key, sum_of_rewards = tup
+    def loop_fn(tup: tuple[pgx.State, PRNGKey, Array, int]) -> tuple[pgx.State, PRNGKey, Array, int]:
+        states, rng_key, sum_of_rewards, counter = tup
         rng_key, key_for_search, key_for_next_step = jax.random.split(rng_key, 3)
 
         (exploitation_logits, _exploration_logits, value, value_epistemic_variance, _reward_epistemic_variance), _ = (
@@ -46,11 +46,12 @@ def evaluate(model: Model, config: Config, context: Context, rng_key: PRNGKey) -
         keys = jax.random.split(key_for_next_step, batch_size)
         next_states = jax.vmap(context.env.step)(states, policy_output.action, keys)
         rewards = next_states.rewards[jnp.arange(states.rewards.shape[0]), states.current_player]
-        return next_states, rng_key, sum_of_rewards + rewards
+        counter = counter + 1
+        return next_states, rng_key, sum_of_rewards + rewards, counter
 
     rng_key, sub_key = jax.random.split(rng_key)
     keys = jax.random.split(sub_key, batch_size)
     states = jax.vmap(context.env.init)(keys)
 
-    states, _, sum_of_rewards = jax.lax.while_loop(cond_fn, loop_fn, (states, rng_key, jnp.zeros(batch_size)))
+    states, _, sum_of_rewards, _ = jax.lax.while_loop(cond_fn, loop_fn, (states, rng_key, jnp.zeros(batch_size), 0))
     return sum_of_rewards.mean()
