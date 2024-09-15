@@ -237,7 +237,7 @@ def main() -> None:
         scale_uncertainty_losses=config.scale_uncertainty_losses,
         hash_path=config.hash_path,  # TODO: Automatically figure this out
         exploration_beta=config.exploration_beta,
-        value_scale=config.value_scale,
+        max_ube=config.max_ube,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature
     )

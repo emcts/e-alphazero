@@ -22,21 +22,18 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
         model_params, model_state, reanalyze_output.observation, is_training=True, update_hash=True
     )
 
-    ube_scale = context.value_scale ** 2
-
     # Compute losses
     # We scale the value target by value_scale, because value pred. is between [-1,1] for stability
-    value_loss = optax.l2_loss(value, reanalyze_output.value_target / context.value_scale)
+    value_loss = optax.l2_loss(value, reanalyze_output.value_target)
     # We scale the ube target by ube_scale, because ube pred. is between [0,1] for stability
-    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target / ube_scale)
+    ube_loss = optax.l2_loss(value_epistemic_variance, reanalyze_output.ube_target)
     exploitation_policy_loss = optax.softmax_cross_entropy(
         exploitation_logits, reanalyze_output.exploitation_policy_target)
     exploration_policy_loss = optax.softmax_cross_entropy(
         exploration_logits, reanalyze_output.exploration_policy_target)
 
     # Compute loss weights, based on Sunrise, https://arxiv.org/pdf/2007.04938
-    epistemic_loss_weights = 0.5 + nn.sigmoid(-1 * reanalyze_output.ube_target * context.loss_weighting_temperature
-                                              * ube_scale)
+    epistemic_loss_weights = 0.5 + nn.sigmoid(-1 * reanalyze_output.ube_target * context.loss_weighting_temperature)
     epistemic_loss_weights = jax.lax.cond(context.weigh_losses, lambda: epistemic_loss_weights,
                                           lambda: jnp.ones_like(value_loss))
 
@@ -48,7 +45,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
     # Compute error for priority:
     error_beta = jax.lax.cond(context.exploration_beta > 0.0, lambda: 0.1, lambda: 0.0)
     # The UBE prediction and target need to be rescaled [0,1] -> [0,max] -> sqrt([0,max])
-    rescaled_ube_prediction = jnp.sqrt(jnp.abs(value_epistemic_variance) * ube_scale)
+    rescaled_ube_prediction = jnp.sqrt(jnp.abs(value_epistemic_variance))
     rescaled_ube_target = jnp.sqrt(reanalyze_output.ube_target)
     priority_score = jnp.abs(
         value

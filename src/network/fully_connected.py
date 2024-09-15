@@ -16,7 +16,7 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         num_actions,
         num_hidden_layers: int = 3,
         layer_size: int = 64,
-        value_scale: float = 1.0,
+        max_ube: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
@@ -29,8 +29,7 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         self.hidden_layer_size = layer_size
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
-        self.value_scale = value_scale
-        self.max_u = value_scale ** 2
+        self.max_u = max_ube
         discount = min(discount, 0.9997)
         self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
@@ -81,8 +80,6 @@ class EpistemicFullyConnectedAZNet(hk.Module):
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty, u)
             u = u.clip(min=0, max=self.max_u)
-            # Scale the value back to [-max_value, max_value]
-            v = v * self.value_scale
 
         if update_hash:
             hash_obj.update(x)

@@ -25,7 +25,7 @@ class Config(pydantic.BaseModel):
     hash_path: str = "minatar_az_net/xxhash32"
     max_epistemic_variance_reward: float = 1.0
     # UBE parameters
-    value_scale: float = 1.0  # Approximately the maximum value for the environment, used to stabilize the val. function
+    max_ube: float = 1.0  # Approx. max_value ** 2, used to bound the predictions of UBE
     exploration_ube_target: bool = True     # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
     # selfplay
     selfplay_batch_size: int = 128  # FIXME: Return these hyperparameters to normal numbers
@@ -98,8 +98,6 @@ class Config(pydantic.BaseModel):
 
 def setup_config(config: Config) -> Config:
     if config.debug:
-        config.env_class = "custom"
-        config.env_id = "deep_sea-16"
         config.selfplay_batch_size = 8
         config.selfplay_simulations_per_step = 16
         config.reanalyze_simulations_per_step = 16
@@ -135,19 +133,19 @@ def setup_config(config: Config) -> Config:
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
     if "minatar" in config.env_id:
         if "breakout" in config.env_id:
-            config.value_scale = 40
+            config.max_ube = 40 ** 2
         elif "space_invaders" in config.env_id:
-            config.value_scale = 200
+            config.max_ube = 200 ** 2
         elif "freeway" in config.env_id:
-            config.value_scale = 60
+            config.max_ube = 60 ** 2
         elif "asterix" in config.env_id:
-            config.value_scale = 50
+            config.max_ube = 25 ** 2
         elif "seaquest" in config.env_id:
-            config.value_scale = 60
+            config.max_ube = 50 ** 2
         else:
             raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
     else:
-        config.value_scale = 1.0
+        config.max_ube = 1.0
 
     config.reanalyze_loops_per_selfplay = max(
         1,

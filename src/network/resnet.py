@@ -49,9 +49,6 @@ class EpistemicResidualAZNet(hk.Module):
         num_blocks: int = 5,
         resnet_v2: bool = True,
         hash_class: Type = SimHash,
-        value_scale: float = 1.0,  # assumes board game
-        max_epistemic_variance_reward: float = 1.0,
-        discount: float = 0.9997,
         hash_args: dict[str, Any] | None = None,
         name="az_resnet",
     ):
@@ -63,11 +60,9 @@ class EpistemicResidualAZNet(hk.Module):
         self.resnet_class = BlockV2 if resnet_v2 else BlockV1
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
-        self.value_scale = value_scale
-        self.max_u = value_scale ** 2
-        discount = min(discount, 0.9997)
-        self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
-        self.max_reward_epistemic_variance = max_epistemic_variance_reward
+        # The network assumes values are bounded -1 to 1
+        self.max_u = 1.0    # for values -1 to 1, the maximum variance is 2**2 / 4 = 1
+        self.max_reward_epistemic_variance = 1.0    # The net assumes rewards -1 to 1
 
     def __call__(
         self, x: Observation, is_training: bool, test_local_stats: bool, update_hash: bool = False
@@ -131,12 +126,8 @@ class EpistemicResidualAZNet(hk.Module):
         scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
-            # Scale the value back to [-max_value, max_value]
-            v = v * self.value_scale
-            u = u * self.max_u
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
-            u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
-            u = u.clip(min=0, max=self.max_u)
+            u = jnp.maximum(scaled_state_novelty, u)
 
         if update_hash:
             hash_obj.update(x)

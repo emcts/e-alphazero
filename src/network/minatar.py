@@ -23,7 +23,7 @@ class EpistemicMinatarAZNet(hk.Module):
         num_actions,
         num_channels: int = 16,
         hidden_layers_size: int = 64,
-        value_scale: float = 1.0,
+        max_ube: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
         hash_class: Type = SimHash,
@@ -45,8 +45,7 @@ class EpistemicMinatarAZNet(hk.Module):
         self.hidden_layers_size = hidden_layers_size
         self.hash_class = hash_class
         self.hash_args = hash_args if hash_args is not None else dict()
-        self.value_scale = value_scale
-        self.max_u = value_scale ** 2
+        self.max_u = max_ube
         discount = min(discount, 0.9997)
         self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
@@ -74,7 +73,7 @@ class EpistemicMinatarAZNet(hk.Module):
         v = hk.Linear(self.hidden_layers_size)(x1)
         v = jax.nn.relu(v)
         v = hk.Linear(1)(v)
-        v = jnp.tanh(v)
+        # v = jnp.tanh(v)
         v = v.reshape((-1,))
 
         # Exploration net body
@@ -96,7 +95,7 @@ class EpistemicMinatarAZNet(hk.Module):
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
         # Note that u is a scalar between 0 and 1, 1 representing max unc. This is done for stability and learning speed
-        u = 0.5 * (jnp.tanh(u) + 1)
+        # u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))
 
         # local uncertainty
@@ -104,10 +103,6 @@ class EpistemicMinatarAZNet(hk.Module):
         scaled_state_novelty = (~hash_obj(x)) * self.max_reward_epistemic_variance
 
         if not is_training:
-            # Scale the value back to [-max_value, max_value]
-            v = v * self.value_scale
-            # We need to rescale u to the right output scale
-            u = u * self.max_u
             # The UBE prediction for AZ is max(attainable sum of reward_unc speculated from local reward_unc, ube)
             u = jnp.maximum(scaled_state_novelty * self.local_unc_to_max_value_unc_scale, u)
             u = u.clip(min=0, max=self.max_u)
