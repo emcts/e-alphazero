@@ -92,13 +92,22 @@ def reanalyze(
     )
     # Compute 1-step td target, with: target = reward + gamma * (not terminal) * value_prediction(next observation)
     # The reward from transitioning into the *next* state, times the value of the next state, if it is not terminal
-    value_target_from_td = experience_pair.second.rewards.squeeze() + config.discount * (~experience_pair.second.terminated) * next_state_value
-    chex.assert_equal_shape([value_target_from_tree, value_target_from_td, experience_pair.second.terminated, next_state_value, experience_pair.second.rewards.squeeze()])
-    value_target = jax.lax.cond(config.value_targets_from_tree, lambda: value_target_from_tree, lambda: value_target_from_td)
+    value_target_from_td = experience_pair.second.rewards.squeeze() + config.discount * next_state_value * \
+                           (~experience_pair.second.terminated)
+    chex.assert_equal_shape([value_target_from_tree, value_target_from_td, experience_pair.second.terminated,
+                             states.terminated, next_state_value, experience_pair.second.rewards.squeeze()])
+    # 1-step TD may be bad because bad actions may have been taken in selfplay
+    # the tree's prediction may be bad, because the rewarding action might not have been searched
+    # So - we return the max over both
+    value_target = jnp.maximum(value_target_from_tree, value_target_from_td)
     exploration_ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
     exploitation_ube_target = search_summary.qvalues_epistemic_variance[jnp.arange(search_summary.qvalues_epistemic_variance.shape[0]), policy_output.action]
     chex.assert_equal_shape([exploration_ube_target, exploitation_ube_target])
     ube_target = jax.lax.cond(config.exploration_ube_target, lambda: exploration_ube_target, lambda: exploitation_ube_target)
+    # Our wrapper only resets after the environment terminated. So the agent still observes terminal states.
+    # The correct target from terminal states for value and UBE is zero.
+    value_target = value_target * (~states.terminated)
+    ube_target = ube_target * (~states.terminated)
 
     completed_q_and_std_scores: Array = mask_invalid_actions(
         jax.vmap(complete_qs)(

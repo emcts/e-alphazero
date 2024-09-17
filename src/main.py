@@ -363,6 +363,11 @@ def main() -> None:
                 )
                 # Make sure that gradients don't pass through the targets
                 reanalyze_output = jax.tree_util.tree_map(jax.lax.stop_gradient, reanalyze_output)
+                if config.debug and "deep-sea" in config.env_id:
+                    print(
+                        f"Number of value_targets = 1.0 in reanalyze output: "
+                        f"{jnp.where(reanalyze_output.value_target == 1.0, reanalyze_output.value_target, 0.0).sum().item()}")
+
                 (
                     model,
                     opt_state,

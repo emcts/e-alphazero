@@ -6,11 +6,12 @@ import emctx
 import jax
 import jax.numpy as jnp
 import pgx
-from pgx.experimental import auto_reset  # type: ignore
+# from pgx.experimental import auto_reset  # type: ignore
 
 from config import Config
 from context import Context
 from type_aliases import Array, Model, PRNGKey
+from typing import Optional
 
 
 class SelfplayOutput(NamedTuple):
@@ -20,6 +21,58 @@ class SelfplayOutput(NamedTuple):
     value_prediction: Array
     ube_prediction: Array
     q_values_epistemic_variance: Array
+
+
+def auto_reset(step_fn, init_fn):
+    """Auto reset wrapper.
+
+    We have a concern about the final state before staging this wrapper:
+
+    When auto-reset happens, the termianl (or truncated) state/observation is
+    replaced by initial state/observation, It's ok if it's termination.
+    However, when truncation happens, value of truncated state/observation
+    might be used by agents (by bootstrap). So it must be stored somewhere.
+    For example,
+
+    https://github.com/Farama-Foundation/Gymnasium/blob/main/gymnasium/wrappers/autoreset.py#L59
+
+    However, currently, truncation does *NOT* actually happens because
+    all of Pgx environments (games) are finite-horizon and
+    terminates within reasonable # of steps.
+    Note that chess, shogi, and Go have `max_termination_steps` as AlphaZero.
+    So, this implementation is enough (so far).
+
+    2. Performance
+    """
+
+    def wrapped_step_fn(
+            state: pgx.State, action: Array, key: Optional[PRNGKey] = None
+    ):
+        assert key is not None, (
+            "v2.0.0 changes the signature of auto reset. Please specify PRNGKey at the third argument:\n\n"
+            "  * <  v2.0.0: step_fn(state, action)\n"
+            "  * >= v2.0.0: step_fn(state, action, key)\n\n"
+            "Note that codes under pgx.experimental are subject to change without notice."
+        )
+
+        # Original behavior:
+        # If state is already terminal, make it not-terminal.
+        # Step the environment.
+        # If new state is terminal reset the environment.
+
+        # Modified behavior:
+        # If state is already terminal, reset the environment.
+        # Otherwise, step
+        key1, key2 = jax.random.split(key)
+        state = jax.lax.cond(
+            (state.terminated | state.truncated),   # If state is already terminal
+            lambda: init_fn(key1),                  # reset the environent
+            lambda: step_fn(state, action, key2),   # step into a new state
+        )
+
+        return state
+
+    return wrapped_step_fn
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[1, 2])

@@ -59,7 +59,6 @@ class Config(pydantic.BaseModel):
     eval_interval: int = 5
     evaluation_batch: int = 128
     # targets
-    value_targets_from_tree: bool = False  # If true, the value targets are the q values of the chosen child, otherwise 1 step td with value prediction of next states
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
     # EMCTS exploration parameters
@@ -98,6 +97,30 @@ class Config(pydantic.BaseModel):
 
 
 def setup_config(config: Config) -> Config:
+    # A unique config for each env:
+    if "deep_sea" in config.env_id:
+        config.selfplay_steps = 8
+        config.selfplay_batch_size = 16
+        config.max_ube = 1.0
+    elif "minatar" in config.env_id:
+        if "breakout" in config.env_id:
+            config.max_ube = 40 ** 2
+        elif "space_invaders" in config.env_id:
+            config.max_ube = 200 ** 2
+        elif "freeway" in config.env_id:
+            config.max_ube = 60 ** 2
+        elif "asterix" in config.env_id:
+            config.max_ube = 25 ** 2
+        elif "seaquest" in config.env_id:
+            config.max_ube = 50 ** 2
+        else:
+            raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
+    elif "subleq" in config.env_id:
+        pass
+    else:
+        print(f"Setting up an environment without unique config setup")
+
+    # Debug overwrites the unique config
     if config.debug:
         config.env_id = "deep_sea-20"
         config.env_class = "custom"
@@ -114,10 +137,6 @@ def setup_config(config: Config) -> Config:
         config.eval_interval = 1
         config.maximum_number_of_iterations = 50
 
-    if "deep_sea" in config.env_id:
-        config.selfplay_steps = 8
-        config.selfplay_batch_size = 16
-
     # Update config with runtime computed values
     if config.seed is None:
         config.seed = random.randint(1, 100000)
@@ -129,21 +148,7 @@ def setup_config(config: Config) -> Config:
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
-    if "minatar" in config.env_id:
-        if "breakout" in config.env_id:
-            config.max_ube = 40 ** 2
-        elif "space_invaders" in config.env_id:
-            config.max_ube = 200 ** 2
-        elif "freeway" in config.env_id:
-            config.max_ube = 60 ** 2
-        elif "asterix" in config.env_id:
-            config.max_ube = 25 ** 2
-        elif "seaquest" in config.env_id:
-            config.max_ube = 50 ** 2
-        else:
-            raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
-    else:
-        config.max_ube = 1.0
+
 
     config.reanalyze_loops_per_selfplay = max(
         1,
