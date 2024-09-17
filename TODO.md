@@ -94,3 +94,14 @@ Architecture:
 
 - "Just an MLP"
 - fully connected, hidden layers ("256 is a good number")
+
+Questions:
+1. Do we actually want to include input/output (yes), after-execution stuff (input/output at least) in the observation?
+  Observation: current memory state (the instructions it has written) + [test input, desired output, remaining input after execution, output from execution] * test_case_num
+2. If yes, do we want to have the same input/output each time or a random test case (per episode)?
+  Same input/output per task, because it helps with hashing
+3. If yes, do we want to have multiple test cases in the observation?
+  Maybe? make it a hyperparam / or at least easy to add in the future
+4. Should reward be determined by test case or all test cases?
+  Reward function per task?
+
