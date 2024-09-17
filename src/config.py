@@ -59,6 +59,7 @@ class Config(pydantic.BaseModel):
     eval_interval: int = 5
     evaluation_batch: int = 128
     # targets
+    value_targets_from_tree: bool = False  # If true, the value targets are the q values of the chosen child, otherwise 1 step td with value prediction of next states
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
     # EMCTS exploration parameters
@@ -98,6 +99,8 @@ class Config(pydantic.BaseModel):
 
 def setup_config(config: Config) -> Config:
     if config.debug:
+        config.env_id = "deep_sea-20"
+        config.env_class = "custom"
         config.selfplay_batch_size = 8
         config.selfplay_simulations_per_step = 16
         config.reanalyze_simulations_per_step = 16

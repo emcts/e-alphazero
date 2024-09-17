@@ -84,7 +84,17 @@ def reanalyze(
         qtransform=emctx.epistemic_qtransform_completed_by_mix_value,  # type: ignore  # TODO: Fix the type in emctx
     )
     search_summary = policy_output.search_tree.epistemic_summary()
-    value_target = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
+    # Value from the tree
+    value_target_from_tree = search_summary.qvalues[jnp.arange(search_summary.qvalues.shape[0]), policy_output.action]  # type: ignore
+    # Get value prediction for next_state
+    (_, _, next_state_value, _, _), _ = (
+        context.forward.apply(model_params, model_state, experience_pair.second.observation, is_training=False)
+    )
+    # Compute 1-step td target, with: target = reward + gamma * (not terminal) * value_prediction(next observation)
+    # The reward from transitioning into the *next* state, times the value of the next state, if it is not terminal
+    value_target_from_td = experience_pair.second.rewards.squeeze() + config.discount * (~experience_pair.second.terminated) * next_state_value
+    chex.assert_equal_shape([value_target_from_tree, value_target_from_td, experience_pair.second.terminated, next_state_value, experience_pair.second.rewards.squeeze()])
+    value_target = jax.lax.cond(config.value_targets_from_tree, lambda: value_target_from_tree, lambda: value_target_from_td)
     exploration_ube_target = jnp.max(search_summary.qvalues_epistemic_variance, axis=1)
     exploitation_ube_target = search_summary.qvalues_epistemic_variance[jnp.arange(search_summary.qvalues_epistemic_variance.shape[0]), policy_output.action]
     chex.assert_equal_shape([exploration_ube_target, exploitation_ube_target])
