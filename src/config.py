@@ -74,6 +74,7 @@ class Config(pydantic.BaseModel):
     beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
     # Evaluation
     num_eval_episodes: int = 32
+    results_path: str = "./evaluation_results"  # Defaults to an evaluation_results dir under src
     # wandb params
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
     wandb_project: str = "e-alphazero"

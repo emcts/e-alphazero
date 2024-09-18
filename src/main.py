@@ -5,7 +5,7 @@ import sys
 import time
 from functools import partial
 from typing import Any, Optional
-
+import pathlib
 import flashbax as fbx  # type: ignore
 import haiku as hk
 import jax
@@ -26,6 +26,7 @@ from selfplay import selfplay, uniformrandomplay
 from train import train
 
 from type_aliases import PRNGKey, Array
+
 
 class TimeoutTerminationWrapper(pgx.Env):
     """
@@ -121,6 +122,10 @@ def main() -> None:
                 all_states_batch = all_states_batch.at[i * size_of_grid + j, i, j].set(True)
         all_states_batch = jnp.expand_dims(all_states_batch, axis=0)
 
+    # Make the results directory
+    pathlib.Path(f"{config.results_path}/{config.wandb_run_name}").mkdir(parents=True, exist_ok=True)
+    complete_results_path = f"{config.results_path}/{config.wandb_run_name}"
+
     print(f"Printing the config:\n{config}", flush=True)
 
     # Initialize Weights & Biases.
@@ -208,6 +213,9 @@ def main() -> None:
     last_states = None
     start_time = time.time()
 
+    mean_returns_list = []
+    frames_at_mean_returns_list = []
+
     context = Context(
         env=env,
         devices=devices,
@@ -254,6 +262,7 @@ def main() -> None:
 
         if iteration % config.eval_interval == 0:
             # Evaluate network.
+            mean_return = None
             if config.exploitation_beta < 0:
                 # Do regular evaluation
                 original_exploitation_beta = config.exploitation_beta
@@ -270,6 +279,11 @@ def main() -> None:
                 rng_key, subkey = jax.random.split(rng_key)
                 mean_return = evaluate(model, config, context, jax.random.split(subkey, num_devices))
                 log.update({"mean_return": mean_return.item()})
+
+            mean_returns_list.append(mean_return)
+            frames_at_mean_returns_list.append(frames)
+            jnp.save(file=complete_results_path + "/mean_returns_list.npy", arr=mean_returns_list)
+            jnp.save(file=complete_results_path + "/frames_at_mean_returns_list.npy", arr=frames_at_mean_returns_list)
             sys.stdout.flush()
 
         if iteration % config.checkpoint_interval == 0:

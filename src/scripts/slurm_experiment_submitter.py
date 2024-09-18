@@ -56,7 +56,7 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                   f"training_to_interactions_ratio={training_to_interactions_ratio} " \
                   f"hash_class={hash_class} exploration_ube_target={exploration_ube_target} " \
                   f"reanalyze_beta={reanalyze_beta} weigh_losses={weigh_losses} " \
-                  f"loss_weighting_temperature={loss_weighting_temperature}"
+                  f"loss_weighting_temperature={loss_weighting_temperature} results_path={results_path}"
 
     script_text = f"""#!/bin/bash
 #SBATCH --job-name={jobname}
