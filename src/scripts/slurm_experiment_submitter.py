@@ -33,7 +33,8 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
                        directed_exploration=None, rescale_q=True,
                        training_to_interactions_ratio=2,
                        hash_class="SimHash", exploration_ube_target=True,
-                       reanalyze_beta=0.0, weigh_losses=False, loss_weighting_temperature=10.0,):
+                       reanalyze_beta=0.0, weigh_losses=False, loss_weighting_temperature=10.0,
+                       env_class="custom"):
     jobname = "eaz" + "_" + environment.replace('minatar-', '')
     if runtime < 1:
         runtime = f"01:00:00"
@@ -44,13 +45,14 @@ def make_sbatch_script(environment, seed=0, run_name=None, results_path=None, ru
     else:
         raise ValueError("runtime must be < 100 hours for HPC")
 
-    full_params = f"seed={seed} env_id={environment} wandb_run_name='{run_name}' exploration_beta={exploration_beta} " \
+    full_params = f"seed={seed} env_class={env_class} env_id={environment} wandb_run_name='{run_name}' " \
+                  f"directed_exploration={directed_exploration} " \
+                  f"exploration_beta={exploration_beta} " \
                   f"learning_rate={learning_rate} " \
                   f"sample_actions={sample_action} " \
                   f"sample_from_improved_policy={sample_action_from_improved_policy} " \
                   f"exploitation_beta={exploitation_beta} " \
                   f"maximum_number_of_iterations={maximum_number_of_iterations} " \
-                  f"directed_exploration={directed_exploration} " \
                   f"rescale_q_values_in_search={rescale_q} " \
                   f"slurm_job_id=$SLURM_JOB_ID " \
                   f"training_to_interactions_ratio={training_to_interactions_ratio} " \
@@ -119,6 +121,10 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
     high = 10000000
 
     for env_id in environments:
+        if "deep_sea" in env_id or "subleq" in env_id:
+            env_class = "custom"
+        else:
+            env_class = "pgx"
         for exploration_beta in exploration_betas:
             for learning_rate in learning_rates:
                 for sample_action in sample_actions:
@@ -165,6 +171,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                                                                                                               reanalyze_beta=reanalyze_beta,
                                                                                                               weigh_losses=weigh_loss,
                                                                                                               loss_weighting_temperature=loss_weighting_temperature,
+                                                                                                              env_class=env_class,
                                                                                                               )
                                                                 seeds.append(seed)
                                                                 run_names.append(run_name)
@@ -176,26 +183,26 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
 
 
 submit_on_cluster = False
-environments = ["minatar-breakout", "minatar-asterix", "minatar-seaquest"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway", "minatar-space_invaders"]
+environments = ["deep_sea-40"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway", "minatar-space_invaders"]
 num_seeds = 2
-purpose = "Tuning pessimistic learning on minatar"
+purpose = "Verifying deep sea"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"
 true_results_path = "/tudelft.net/staff-umbrella/inadequate/emctx/results"
 local_results_path = "/home/yaniv"
-maximum_number_of_iterations = 500
-exploration_betas = [0.0]
+maximum_number_of_iterations = 350
+exploration_betas = [1.0]
 exploitation_betas = [0.0]
 learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
 sample_actions = [False]
 sample_actions_from_improved_policy = [False]
 scale_values = [True]
-directed_exploration = [False]
+directed_exploration = [True, False]
 training_to_interactions_ratios = [8]
 hash_classes = ["SimHash", "XXHash"]    # "LCGHash", "XXHash"
-exploration_ube_targets = [False]
-reanalyze_betas = [0.0, -0.1, -0.5, -1.0]
-weigh_losses = [True, False]    # Defaults to False
-loss_weighting_temperatures = [10, 20, 50, 100] # Defaults to 10
+exploration_ube_targets = [True]
+reanalyze_betas = [0.0]
+weigh_losses = [False]    # Defaults to False
+loss_weighting_temperatures = [10] # Defaults to 10
 
 save_jobs_paths = True
 job_paths = []
