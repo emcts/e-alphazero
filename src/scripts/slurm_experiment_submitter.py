@@ -82,7 +82,7 @@ hostname
 previous=$(/usr/bin/nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/tail -n '+2')
 
 # apptainer command
-srun apptainer exec --nv --mount type=bind,src=/tudelft.net/staff-umbrella/inadequate/emctx/,dst=/mnt/umbrella_emctx/ --mount type=bind,src=/tudelft.net/staff-umbrella/inadequate/emctx/e-alphazero/src/,dst=/mnt/alphazero/ /tudelft.net/staff-umbrella/inadequate/emctx/container/emctx_container.sif python3 /mnt/alphazero/main.py {full_params}
+srun apptainer exec --nv --mount type=bind,src=/tudelft.net/staff-umbrella/inadequate/emctx/,dst=/mnt/umbrella_emctx/ --mount type=bind,src=/tudelft.net/staff-umbrella/inadequate/emctx/e-alphazero/src/,dst=/mnt/alphazero/ --mount type=bind,src=/tudelft.net/staff-umbrella/inadequate/emctx/results/,dst=/mnt/results/ /tudelft.net/staff-umbrella/inadequate/emctx/container/emctx_container.sif python3 /mnt/alphazero/main.py {full_params}
 
 /usr/bin/nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/grep -v -F "$previous"""
     return script_text, full_params
