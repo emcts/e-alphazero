@@ -291,7 +291,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
             a_result = read_memory(memory_state, a, input_state)
             b_result = read_memory(memory_state, b, input_state)
-            jax.debug.print("a b c: {a} {b} {c}", a=a, b=b, c=c)
 
             # mem[A] = mem[A] - mem[B]
             value = (a_result.value_read - b_result.value_read) % word_size
@@ -303,7 +302,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             # if mem[A] <= 0 { goto C }
             execute_jump = (value == 0) | (value >= word_size / 2)
             cursor_position = jax.lax.cond(execute_jump, lambda: c, lambda: cursor_position + 3)
-            jax.debug.print("next cursor position: {}", cursor_position)
 
             # Update input state if anything read from it. Input can advance only by 1 per instruction.
             input_state = jax.lax.cond(
