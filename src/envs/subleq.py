@@ -40,12 +40,11 @@ def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
     special tokens used to fill up input/output so that the size is always the same.
     """
     chex.assert_rank(arr, 1)
-    indices = arr % word_size
-    indices = indices.at[arr == word_size].set(word_size)
-    shape = (indices.shape[0], word_size + 1)
+    indices = jnp.where(arr == word_size, arr % word_size, word_size)
+    shape = (arr.shape[0], word_size + 1)
     # TODO: Check if this should not have `jnp.arange(indices.shape[0])` instead of `:`.
     output = jnp.zeros(shape, dtype=jnp.bool).at[:, indices].set(True, unique_indices=True)
-    chex.assert_shape(output, (arr.shape[0], word_size + 1))
+    chex.assert_shape(output, shape)
     return output
 
 
@@ -367,52 +366,52 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         output_after=after_execution.output_state,
         bytes_used=after_execution.bytes_used,
         cycles_used=after_execution.cycles,
-        correct=(~after_execution.error) & (test_output == after_execution.output_state),
+        correct=~after_execution.error & (test_output == after_execution.output_state).all(),
     )
 
 
-def get_test_fn(task: Array) -> SubleqTestFn:
-    test_input, test_output = jax.lax.switch(
+def get_test_cases(task: Array) -> tuple[Array, Array]:
+    """Get the test cases for a given task."""
+    # TODO: Implement test cases for other tasks.
+    # TODO: Have more than one test per task. (Will also require changing test)
+    negation_input = jnp.arange(1, 5, dtype=jnp.int32)
+    return jax.lax.switch(
         task,
-        # TODO: Do this for many tests
         [
             # SubleqTask.NEGATION
-            # TODO: Have more than one test per task.
-            lambda: (
-                jnp.arange(1, 5, dtype=jnp.int32),
-                -jnp.arange(1, 5, dtype=jnp.int32),
-            )
+            lambda: (negation_input, -negation_input)
         ],
     )
 
-    def test_fn(word_size: int, memory_state: Array) -> SubleqTestResult:
-        chex.assert_rank(memory_state, 1)
-        chex.assert_type(memory_state, jnp.int32)
 
-        # FIXME: Padding will have to work a bit differently once we have more tests, but for now it's ok.
-        # Namely, we have to pad each test case individually and stack them.
-        padded_test_input = pad(test_input, MAXIMUM_INPUT_LENGTH, word_size)
-        padded_test_output = pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size)
+def run_tests(word_size: int, memory_state: Array, test_input: Array, test_output: Array) -> SubleqTestResult:
+    """Run the program against a test-set, i.e. (test_input, test_output)."""
+    chex.assert_rank(memory_state, 1)
+    chex.assert_type(memory_state, jnp.int32)
 
-        # TODO: jax.vmap over test cases (maybe do example first, then vmap everything else conditionally on success of example?)
-        result = simulate(
-            word_size,
-            memory_state,
-            padded_test_input,
-            padded_test_output,
-        )
+    # FIXME: Padding will have to work a bit differently once we have more tests, but for now it's ok.
+    # Namely, we have to pad each test case individually and stack them.
+    # Maybe padding should be done in `get_test_cases`.
+    padded_test_input = pad(test_input, MAXIMUM_INPUT_LENGTH, word_size)
+    padded_test_output = pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size)
 
-        return SubleqTestResult(
-            solved=result.correct,  # TODO: should have shape [batch_size], and should depend on the whole test_set?
-            example_input=padded_test_input,  # TODO: change to only take the first
-            example_output=padded_test_output,  # TODO: change to only take the first
-            input_after=result.input_after,  # TODO: change to only take the first
-            output_after=result.output_after,  # TODO: change to only take the first
-            bytes_used=result.bytes_used,  # TODO: Take the max
-            cycles_used=result.cycles_used,  # TODO: Take the max
-        )
+    # TODO: jax.vmap over test cases (maybe do example first, then vmap everything else conditionally on success of example?)
+    result = simulate(
+        word_size,
+        memory_state,
+        padded_test_input,
+        padded_test_output,
+    )
 
-    return test_fn
+    return SubleqTestResult(
+        solved=result.correct,  # TODO: should have shape [batch_size], and should depend on the whole test_set?
+        example_input=padded_test_input,  # TODO: change to only take the first
+        example_output=padded_test_output,  # TODO: change to only take the first
+        input_after=result.input_after,  # TODO: change to only take the first
+        output_after=result.output_after,  # TODO: change to only take the first
+        bytes_used=result.bytes_used,  # TODO: Take the max
+        cycles_used=result.cycles_used,  # TODO: Take the max
+    )
 
 
 def solved_or_not(execution_result: SubleqTestResult) -> Array:
@@ -436,7 +435,7 @@ class SubleqState(pgx.State):
 
     _step_count: Array = jnp.int32(0)
     _task: Array = jnp.int32(SubleqTask.NEGATION)
-    _test_fn: SubleqTestFn = get_test_fn(jnp.int32(SubleqTask.NEGATION))
+    _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION))
 
     _memory_state: Array = jnp.zeros(0, dtype=jnp.bool)  # depends on word_size
     _example_input: Array = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
@@ -496,12 +495,12 @@ class Subleq(pgx.Env):
         state = SubleqState(
             legal_action_mask=legal_action_mask,
             _task=task,
-            _test_fn=get_test_fn(task),
+            _test_cases=get_test_cases(task),
             _memory_state=jnp.zeros(self.word_size, dtype=jnp.int32),
         )
-        result = state._test_fn(self.word_size, state._memory_state)
+        result = run_tests(self.word_size, state._memory_state, state._test_cases[0], state._test_cases[1])
         rewards = self.reward_fn(result)
-        state = state.replace(
+        state = state.replace(  # type: ignore
             _example_input=result.example_input,
             _example_output=result.example_output,
             _example_input_after=result.input_after,
@@ -511,30 +510,29 @@ class Subleq(pgx.Env):
 
     def _step(self, state: SubleqState, action: Array, key: PRNGKey) -> SubleqState:
         assert isinstance(state, SubleqState)
-        chex.assert_rank([state.observation, state._memory_state, action], [2, 1, 1])
+        chex.assert_rank([state.observation, state._memory_state, action], [2, 1, 0])
 
         def execute_step_if_not_terminated(state: SubleqState, action: Array) -> SubleqState:
             # Add a byte to the memory state.
-            word_to_write = jnp.argmax(action, axis=1)
-            new_memory_state = state._memory_state.at[state._step_count - 1].set(word_to_write)
+            new_memory_state = state._memory_state.at[state._step_count - 1].set(action)
             # Run the program.
-            result = state._test_fn(self.word_size, new_memory_state)
+            result = run_tests(self.word_size, new_memory_state, state._test_cases[0], state._test_cases[1])
             # Calculate reward.
             rewards = self.reward_fn(result)
             # Update properties related to observation.
-            state = state.replace(
+            state = state.replace(  # type: ignore
                 _memory_state=new_memory_state,
                 _example_input=result.example_input,
                 _example_output=result.example_output,
                 _example_input_after=result.input_after,
                 _example_output_after=result.output_after,
             )
-            return state.replace(
+            return state.replace(  # type: ignore
                 observation=self._observe(state, state.current_player), rewards=rewards, _solved=result.solved
             )
 
         return jax.lax.cond(
-            state._step_count >= self.word_size or state._solved,
+            (state._step_count >= self.word_size) | state._solved,
             lambda state, _action: state.replace(terminated=True),
             execute_step_if_not_terminated,
             state,
