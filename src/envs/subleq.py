@@ -356,7 +356,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             output_state=word_size * jnp.ones_like(test_output),
         ),
     )
-    jax.debug.print("after_exec: {}", after_execution)
     chex.assert_shape(
         [after_execution.input_state, after_execution.output_state],
         [(MAXIMUM_INPUT_LENGTH,), (MAXIMUM_OUTPUT_LENGTH,)],
