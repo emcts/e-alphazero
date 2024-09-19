@@ -20,6 +20,7 @@ from flashbax.vault import Vault
 from config import Config, setup_config
 from context import Context, get_epistemic_recurrent_fn, get_forward_fn
 from envs.deep_sea import DeepSea
+from envs.subleq import Subleq, SubleqTask
 from evaluate import evaluate
 from reanalyze import reanalyze
 from selfplay import selfplay, uniformrandomplay
@@ -33,6 +34,7 @@ class TimeoutTerminationWrapper(pgx.Env):
     A wrapper to induce termination on timeout.
     Automatically supports all methods from the original environment.
     """
+
     def __init__(self, env: pgx.Env, timelimit: int):
         super().__init__()
         self.env = env
@@ -45,10 +47,10 @@ class TimeoutTerminationWrapper(pgx.Env):
         return state
 
     def step(
-            self,
-            state: pgx.State,
-            action: Array,
-            key: Optional[Array] = None,
+        self,
+        state: pgx.State,
+        action: Array,
+        key: Optional[Array] = None,
     ) -> pgx.State:
         new_state = self.env.step(state, action, key)
         self.step_counter += 1
@@ -85,7 +87,6 @@ class TimeoutTerminationWrapper(pgx.Env):
         Delegate all other method calls to the wrapped environment.
         """
         return getattr(self.env, name)
-
 
 
 @partial(jax.pmap, static_broadcasted_argnums=[2])
@@ -153,6 +154,12 @@ def main() -> None:
             s = s.removeprefix("deep_sea-")
             size_of_grid = int(s) if s.isnumeric() else 4
             env = DeepSea(size_of_grid=size_of_grid, action_map_key=subkey_for_env)
+        case ("custom", str(s)) if s.startswith("subleq"):
+            s = s.removeprefix("subleq-")
+            word_size = int(s) if s.isnumeric() else 256
+            # TODO: Make tasks configurable with command line args
+            # TODO: Make reward function configurable with command line args
+            env = Subleq([SubleqTask.NEGATION], word_size)
         case ("pgx", env_id) if env_id in pgx.available_envs():
             if "minatar" in env_id:
                 env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
@@ -193,10 +200,7 @@ def main() -> None:
         vault_name = parts[-2]
         rel_dir = '/'.join(parts[:-2]) + '/' if len(parts) > 2 else ''
         rb_vault = Vault(
-            vault_uid=vault_uid,
-            vault_name=vault_name,
-            experience_structure=buffer_state.experience,
-            rel_dir=rel_dir
+            vault_uid=vault_uid, vault_name=vault_name, experience_structure=buffer_state.experience, rel_dir=rel_dir
         )
 
     # Prepare checkpoint directory.
@@ -250,7 +254,7 @@ def main() -> None:
         exploration_beta=config.exploration_beta,
         max_ube=config.max_ube,
         weigh_losses=config.weigh_losses,
-        loss_weighting_temperature=config.loss_weighting_temperature
+        loss_weighting_temperature=config.loss_weighting_temperature,
     )
 
     # Training loop
@@ -380,7 +384,8 @@ def main() -> None:
                 if config.debug and "deep-sea" in config.env_id:
                     print(
                         f"Number of value_targets = 1.0 in reanalyze output: "
-                        f"{jnp.where(reanalyze_output.value_target == 1.0, reanalyze_output.value_target, 0.0).sum().item()}")
+                        f"{jnp.where(reanalyze_output.value_target == 1.0, reanalyze_output.value_target, 0.0).sum().item()}"
+                    )
 
                 (
                     model,
