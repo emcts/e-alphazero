@@ -156,7 +156,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
         value_read: Array = jnp.int32(0)
         accessed_input: Array = jnp.bool(False)
-        halt: Array = jnp.bool(False)
         error: Array = jnp.bool(False)
 
     def read_memory(memory_state: Array, address: Array, input_state: Array) -> ReadMemoryResult:
@@ -179,7 +178,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             case x if x == ADDRESS_OUT:
                 return default_result
             case x if x == ADDRESS_HALT:
-                return default_result._replace(halt=True)
+                return default_result
         ```
         """
         default_result = ReadMemoryResult()
@@ -200,7 +199,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 # x == ADDRESS_OUT
                 lambda: default_result,
                 # x == ADDRESS_HALT
-                lambda: default_result._replace(halt=True),
+                lambda: default_result,
             ]
         )
         assert len(branches) == word_size
@@ -213,7 +212,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         output_state: Array
         output_cursor: Array
         modified_output: Array = jnp.bool(False)
-        halt: Array = jnp.bool(False)
         error: Array = jnp.bool(False)
 
     def write_memory(
@@ -224,6 +222,8 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
         ```
         match address:
+            case x if x <= ADDRESS_MAX:
+                return default_result._replace(memory_state=memory_state.at[address].set(value))
             case x if x == ADDRESS_IN:
                 return default_result
             case x if x == ADDRESS_OUT:
@@ -236,9 +236,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                     modified_output=True,
                 )
             case x if x == ADDRESS_HALT:
-                return default_result._replace(halt=True)
-            case _:
-                return default_result._replace(memory_state=memory_state.at[address].set(value))
+                return default_result
         ```
         """
         default_result = WriteMemoryResult(
@@ -264,7 +262,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                     ),
                 ),
                 # x == ADDRESS_HALT
-                lambda: default_result._replace(halt=True),
+                lambda: default_result,
             ]
         )
         assert len(branches) == word_size
@@ -293,7 +291,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
             a_result = read_memory(memory_state, a, input_state)
             b_result = read_memory(memory_state, b, input_state)
-            c_result = read_memory(memory_state, c, input_state)
+            jax.debug.print("a b c: {a} {b} {c}", a=a, b=b, c=c)
 
             # mem[A] = mem[A] - mem[B]
             value = (a_result.value_read - b_result.value_read) % word_size
@@ -302,36 +300,29 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             output_state = write_result.output_state
             output_cursor = write_result.output_cursor
 
-            # if mem[A] <= 0 { goto mem[C] }
+            # if mem[A] <= 0 { goto C }
             execute_jump = (value == 0) | (value >= word_size / 2)
-            cursor_position = jax.lax.cond(execute_jump, lambda: c_result.value_read, lambda: cursor_position + 3)
+            cursor_position = jax.lax.cond(execute_jump, lambda: c, lambda: cursor_position + 3)
+            jax.debug.print("next cursor position: {}", cursor_position)
 
             # Update input state if anything read from it. Input can advance only by 1 per instruction.
             input_state = jax.lax.cond(
-                a_result.accessed_input | b_result.accessed_input | (execute_jump & c_result.accessed_input),
+                a_result.accessed_input | b_result.accessed_input,
                 lambda s: jnp.roll(s, -1).at[s.shape[0] - 1].set(word_size),
                 lambda s: s,
                 input_state,
             )
 
             halt = (
-                a_result.halt
-                | b_result.halt
-                | (execute_jump & c_result.halt)
-                | write_result.halt
+                # Halt when jumping to an address that overlaps ADDRESS_HALT.
+                (execute_jump & c > ADDRESS_MAX)
                 # Halt on correct output (like in the game).
                 | (output_state == test_output).all()
             )
-            error = (
-                a_result.error
-                | b_result.error
-                | (execute_jump & c_result.error)
-                | write_result.error
-                | (
-                    # Error on first incorrect output (like in the game).
-                    write_result.modified_output
-                    & (output_state[output_cursor - 1] != test_output[output_cursor - 1])
-                )
+            error = (a_result.error | b_result.error | write_result.error) | (
+                # Error on first incorrect output (like in the game).
+                write_result.modified_output
+                & (output_state[output_cursor - 1] != test_output[output_cursor - 1])
             )
 
             return InterpreterState(
@@ -367,6 +358,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             output_state=word_size * jnp.ones_like(test_output),
         ),
     )
+    jax.debug.print("after_exec: {}", after_execution)
     chex.assert_shape(
         [after_execution.input_state, after_execution.output_state],
         [(MAXIMUM_INPUT_LENGTH,), (MAXIMUM_OUTPUT_LENGTH,)],
