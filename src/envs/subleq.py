@@ -103,6 +103,7 @@ class SubleqSimulateResult(NamedTuple):
     output_after: Array
     bytes_used: Array
     cycles_used: Array
+    correct: Array
 
 
 SubleqRewardFn = Callable[[SubleqTestResult], Array]
@@ -115,80 +116,88 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
     ADDRESS_IN = word_size - 3  # Reads a value from input (writes are ignored)
     ADDRESS_OUT = word_size - 2  # Writes a result to output (reads as zero)
     ADDRESS_HALT = word_size - 1  # Terminates the program when accessed (reads and write are ignored)
+    MAX_CYCLE_COUNT = 200  # Terminate the program if it does more than this many cycles.
 
     class InterpreterState(NamedTuple):
         memory_state: Array
         input_state: Array
         output_state: Array
+        output_cursor: int
         cursor_position: int
-
         bytes_used: int
         cycles: int
-        should_halt: bool
+        halt: bool
         error: bool
 
     class ReadMemoryResult(NamedTuple):
         value_read: int
         input_state: Array
-        should_halt: bool
+        accessed_input: bool
+        halt: bool
         error: bool
 
     def read_memory(memory_state: Array, address: int, input_state: Array) -> ReadMemoryResult:
         default_result = ReadMemoryResult(
             value_read=0,
-            input_state=input_state,
+            accessed_input=False,
             error=False,
-            should_halt=False,
+            halt=False,
         )
         match address:
-            case x if x <= ADDRESS_MAX:
-                return default_result.replace(value_read=memory_state[address])
             case x if x == ADDRESS_IN:
                 # Check if there is any more input left.
                 if input_state[0] >= word_size:
-                    return default_result.replace(should_halt=True, error=True)
+                    return default_result.replace(error=True)
                 value_read = input_state[0]
-                input_state = jnp.roll(input_state, -1)
-                input_state = input_state.at[input_state.shape[0] - 1].set(word_size)
                 return default_result.replace(
                     value_read=value_read,
-                    input_state=input_state,
+                    accessed_input=True,
                 )
             case x if x == ADDRESS_OUT:
                 return default_result
             case x if x == ADDRESS_HALT:
-                return default_result.replace(should_halt=True)
+                return default_result.replace(halt=True)
+            case _:
+                return default_result.replace(value_read=memory_state[address])
 
     class WriteMemoryResult(NamedTuple):
         memory_state: Array
         output_state: Array
-        should_halt: bool
+        output_cursor: int
+        modified_output: bool
+        halt: bool
         error: bool
 
-    def write_memory(memory_state: Array, address: int, value: int, output_state: Array) -> WriteMemoryResult:
+    def write_memory(
+        memory_state: Array, address: int, value: int, output_state: Array, output_cursor: int
+    ) -> WriteMemoryResult:
         default_result = WriteMemoryResult(
             memory_state=memory_state,
             output_state=output_state,
-            should_halt=False,
+            output_cursor=output_cursor,
+            modified_output=False,
+            halt=False,
             error=False,
         )
         match address:
-            case x if x <= ADDRESS_MAX:
-                return default_result.replace(memory_state=memory_state.at[address].set(value))
             case x if x == ADDRESS_IN:
                 return default_result
             case x if x == ADDRESS_OUT:
                 # Check if there is space in the output.
-                if output_state[output_state.shape[0]] < word_size:
-                    return default_result.replace(should_halt=True, error=True)
-                output_state = jnp.roll(output_state, 1)
-                output_state = output_state.at[0].set(value)
-                return default_result.replace(output_state=output_state)
+                if output_cursor >= MAXIMUM_OUTPUT_LENGTH:
+                    return default_result.replace(error=True)
+                return default_result.replace(
+                    output_state=output_state.at[output_cursor].set(value),
+                    output_cursor=output_cursor + 1,
+                    modified_output=True,
+                )
             case x if x == ADDRESS_HALT:
-                return default_result.replace(should_halt=True)
+                return default_result.replace(halt=True)
+            case _:
+                return default_result.replace(memory_state=memory_state.at[address].set(value))
 
     def cond_fn(state: InterpreterState) -> bool:
-        return state.should_halt
+        return (not state.error) and (not state.halt) and (state.cycles < MAX_CYCLE_COUNT)
 
     def body_fn(state: InterpreterState) -> InterpreterState:
         cursor_position = state.cursor_position
@@ -199,15 +208,13 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             return state.replace(  # type: ignore
                 cycles=cycles,
                 error=True,
-                should_halt=True,
             )
 
         memory_state = state.memory_state
         input_state = state.input_state
-        output_state = state.output_state
         bytes_used = max(state.cursor_position + 3, state.bytes_used)
 
-        # mem[A] = mem[A] - mem[B]; if mem[A] <= 0 { goto mem[C] }
+        # subleq A B C
         a = memory_state[cursor_position]
         b = memory_state[cursor_position + 1]
         c = memory_state[cursor_position + 2]
@@ -215,27 +222,52 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         a_result = read_memory(memory_state, a, input_state)
         b_result = read_memory(memory_state, b, input_state)
         c_result = read_memory(memory_state, c, input_state)
-        # FIXME: Accessing @IN only reads 1 thing from input, but it does not matter whether it was A, B, or C that did it.
 
+        # mem[A] = mem[A] - mem[B]
         value = (a_result.value_read - b_result.value_read) % word_size
-        write_result = write_memory(memory_state, a, value, output_state)
-        # TODO: update memory state
+        write_result = write_memory(memory_state, a, value, state.output_state, state.output_cursor)
+        memory_state = write_result.memory_state
+        output_state = write_result.output_state
+        output_cursor = write_result.output_cursor
 
-        if value == 0 or value >= word_size / 2:
-            cursor_position = c_result.value_read
+        # if mem[A] <= 0 { goto mem[C] }
+        execute_jump = value == 0 or value >= word_size / 2
+        cursor_position = c_result.value_read if execute_jump else cursor_position + 3
 
-        # TODO:
-        # - Handle all the exceptions (errors, should_halt)
-        # - Convert pseudocode to jax
+        # Update input state if anything read from it. Input can advance only by 1 per instruction.
+        if a_result.accessed_input or b_result.accessed_input or (execute_jump and c_result.accessed_input):
+            input_state = jnp.roll(input_state, -1)
+            input_state = input_state.at[input_state.shape[0] - 1].set(word_size)
+
+        halt = (
+            a_result.halt
+            or b_result.halt
+            or (execute_jump and c_result.halt)
+            or write_result.halt
+            # Halt on correct output (like in the game).
+            or output_state == test_output
+        )
+        error = (
+            a_result.error
+            or b_result.error
+            or (execute_jump and c_result.error)
+            or write_result.error
+            or (
+                # Error on first incorrect output (like in the game).
+                write_result.modified_output
+                and output_state[output_cursor - 1] != test_output[output_cursor - 1]
+            )
+        )
 
         return InterpreterState(
             memory_state=memory_state,
             input_state=input_state,
             output_state=output_state,
+            output_cursor=output_cursor,
             cursor_position=cursor_position,
             bytes_used=bytes_used,
             cycles=cycles,
-            should_halt=should_halt,
+            halt=halt,
             error=error,
         )
 
@@ -246,8 +278,12 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             memory_state=memory_state,
             input_state=test_input,
             output_state=jnp.ones_like(test_output),
+            output_cursor=0,
             cursor_position=0,
-            should_halt=False,
+            cycles=0,
+            bytes_used=0,
+            halt=False,
+            error=False,
         ),
     )
     return SubleqSimulateResult(
@@ -255,6 +291,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         output_after=after_execution.output_state,
         bytes_used=after_execution.bytes_used,
         cycles_used=after_execution.cycles,
+        correct=(not after_execution.error) and test_output == after_execution.output_state,
     )
 
 
