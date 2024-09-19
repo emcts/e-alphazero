@@ -56,7 +56,7 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             hash_class=hash_class,
             max_epistemic_variance_reward=config.max_epistemic_variance_reward,
         )
-    elif "deep_sea" in config.env_id:
+    elif "deep_sea" in config.env_id or "subleq" in config.env_id:
         return EpistemicFullyConnectedAZNet(
             num_actions=env.num_actions,
             discount=config.discount,
@@ -119,8 +119,6 @@ def get_epistemic_recurrent_fn(
             forward.apply(model_params, model_state, state.observation, is_training=False)
         )
         logits = jax.lax.cond(exploration, lambda: exploration_logits, lambda: exploitation_logits)
-        # The below does EMCTS for exploration with a uniform prior_policy
-        # logits = jax.lax.cond(exploration, lambda: jnp.zeros_like(exploration_logits), lambda: exploitation_logits)
 
         # Subtract max from logits to improve numerical stability.
         logits = logits - jnp.max(logits, axis=-1, keepdims=True)
