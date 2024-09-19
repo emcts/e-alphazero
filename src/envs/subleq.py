@@ -44,7 +44,9 @@ def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
     indices = indices.at[arr == word_size].set(word_size)
     shape = (indices.shape[0], word_size + 1)
     # TODO: Check if this should not have `jnp.arange(indices.shape[0])` instead of `:`.
-    return jnp.zeros(shape, dtype=jnp.bool).at[:, indices].set(True, unique_indices=True)
+    output = jnp.zeros(shape, dtype=jnp.bool).at[:, indices].set(True, unique_indices=True)
+    chex.assert_shape(output, (arr.shape[0], word_size + 1))
+    return output
 
 
 def observation_to_subleq_words(arr: Array) -> Array:
@@ -64,14 +66,18 @@ def observation_to_subleq_words(arr: Array) -> Array:
     ```
     """
     chex.assert_rank(arr, 2)
-    return jnp.argmax(arr, axis=1)
+    output = jnp.argmax(arr, axis=1)
+    chex.assert_shape(output, (arr.shape[0],))
+    return output
 
 
 def pad(array: Array, desired_size: int, word_size: int) -> Array:
     """Pad the array out with the special value (= word_size)."""
     chex.assert_rank(array, 1)
-    outside = word_size * jnp.ones(desired_size)
-    return outside.at[: array.shape[0]].set(array)
+    outside = word_size * jnp.ones(desired_size, dtype=jnp.int32)
+    output = outside.at[: array.shape[0]].set(array)
+    chex.assert_shape(output, (desired_size,))
+    return output
 
 
 class SubleqTask(IntEnum):
@@ -121,6 +127,7 @@ SubleqTestFn = Callable[[int, Array], SubleqTestResult]
 def simulate(word_size: int, memory_state: Array, test_input: Array, test_output: Array) -> SubleqSimulateResult:
     """Simulate the program given in the memory state for a specific test input and output."""
     chex.assert_rank([memory_state, test_input, test_output], 1)
+    chex.assert_type([memory_state, test_input, test_output], jnp.int32)
     ADDRESS_MAX = word_size - 4  # Maximum user-modifiable address
     ADDRESS_IN = word_size - 3  # Reads a value from input (writes are ignored)
     ADDRESS_OUT = word_size - 2  # Writes a result to output (reads as zero)
@@ -132,60 +139,55 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         memory_state: Array
         input_state: Array
         output_state: Array
-        output_cursor: int
-        cursor_position: int
-        bytes_used: int
-        cycles: int
-        halt: bool
-        error: bool
+        output_cursor: Array = jnp.int32(0)
+        cursor_position: Array = jnp.int32(0)
+        bytes_used: Array = jnp.int32(0)
+        cycles: Array = jnp.int32(0)
+        halt: Array = jnp.bool(False)
+        error: Array = jnp.bool(False)
 
     class ReadMemoryResult(NamedTuple):
         """Outcome of reading from memory (or input)."""
 
-        value_read: int
-        accessed_input: bool
-        halt: bool
-        error: bool
+        value_read: Array = jnp.int32(0)
+        accessed_input: Array = jnp.bool(False)
+        halt: Array = jnp.bool(False)
+        error: Array = jnp.bool(False)
 
-    def read_memory(memory_state: Array, address: int, input_state: Array) -> ReadMemoryResult:
+    def read_memory(memory_state: Array, address: Array, input_state: Array) -> ReadMemoryResult:
         """
         Pseudocode:
 
         ```
         match address:
             case x if x <= ADDRESS_MAX:
-                return default_result.replace(value_read=memory_state[address])
+                return default_result._replace(value_read=memory_state[address])
             case x if x == ADDRESS_IN:
                 # Check if there is any more input left.
                 if input_state[0] >= word_size:
-                    return default_result.replace(error=True)
+                    return default_result._replace(error=True)
                 value_read = input_state[0]
-                return default_result.replace(
+                return default_result._replace(
                     value_read=value_read,
                     accessed_input=True,
                 )
             case x if x == ADDRESS_OUT:
                 return default_result
             case x if x == ADDRESS_HALT:
-                return default_result.replace(halt=True)
+                return default_result._replace(halt=True)
         ```
         """
-        default_result = ReadMemoryResult(
-            value_read=0,
-            accessed_input=False,
-            error=False,
-            halt=False,
-        )
+        default_result = ReadMemoryResult()
         branches = (
             # x <= ADDRESS_MAX
-            [lambda: default_result.replace(value_read=memory_state[address])] * (ADDRESS_MAX + 1)
+            [lambda: default_result._replace(value_read=memory_state[address])] * (ADDRESS_MAX + 1)
             + [
                 # x == ADDRESS_IN
                 lambda: jax.lax.cond(
                     # Check if there is any more input left.
                     input_state[0] >= word_size,
-                    lambda: default_result.replace(error=True),
-                    lambda: default_result.replace(
+                    lambda: default_result._replace(error=True),
+                    lambda: default_result._replace(
                         value_read=input_state[0],
                         accessed_input=True,
                     ),
@@ -193,7 +195,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 # x == ADDRESS_OUT
                 lambda: default_result,
                 # x == ADDRESS_HALT
-                lambda: default_result.replace(halt=True),
+                lambda: default_result._replace(halt=True),
             ]
         )
         assert len(branches) == word_size
@@ -204,13 +206,13 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
         memory_state: Array
         output_state: Array
-        output_cursor: int
-        modified_output: bool
-        halt: bool
-        error: bool
+        output_cursor: Array
+        modified_output: Array = jnp.bool(False)
+        halt: Array = jnp.bool(False)
+        error: Array = jnp.bool(False)
 
     def write_memory(
-        memory_state: Array, address: int, value: int, output_state: Array, output_cursor: int
+        memory_state: Array, address: Array, value: Array, output_state: Array, output_cursor: Array
     ) -> WriteMemoryResult:
         """
         Pseudocode:
@@ -222,29 +224,26 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             case x if x == ADDRESS_OUT:
                 # Check if there is space in the output.
                 if output_cursor >= MAXIMUM_OUTPUT_LENGTH:
-                    return default_result.replace(error=True)
-                return default_result.replace(
+                    return default_result._replace(error=True)
+                return default_result._replace(
                     output_state=output_state.at[output_cursor].set(value),
                     output_cursor=output_cursor + 1,
                     modified_output=True,
                 )
             case x if x == ADDRESS_HALT:
-                return default_result.replace(halt=True)
+                return default_result._replace(halt=True)
             case _:
-                return default_result.replace(memory_state=memory_state.at[address].set(value))
+                return default_result._replace(memory_state=memory_state.at[address].set(value))
         ```
         """
         default_result = WriteMemoryResult(
             memory_state=memory_state,
             output_state=output_state,
             output_cursor=output_cursor,
-            modified_output=False,
-            halt=False,
-            error=False,
         )
         branches = (
             # x <= ADDRESS_MAX
-            [lambda: default_result.replace(memory_state=memory_state.at[address].set(value))] * (ADDRESS_MAX + 1)
+            [lambda: default_result._replace(memory_state=memory_state.at[address].set(value))] * (ADDRESS_MAX + 1)
             + [
                 # x == ADDRESS_IN
                 lambda: default_result,
@@ -252,23 +251,23 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 lambda: jax.lax.cond(
                     # Check if there is space in the output.
                     output_cursor >= MAXIMUM_OUTPUT_LENGTH,
-                    lambda: default_result.replace(error=True),
-                    lambda: default_result.replace(
+                    lambda: default_result._replace(error=True),
+                    lambda: default_result._replace(
                         output_state=output_state.at[output_cursor].set(value),
                         output_cursor=output_cursor + 1,
                         modified_output=True,
                     ),
                 ),
                 # x == ADDRESS_HALT
-                lambda: default_result.replace(halt=True),
+                lambda: default_result._replace(halt=True),
             ]
         )
         assert len(branches) == word_size
         return jax.lax.switch(address, branches)
 
-    def cond_fn(state: InterpreterState) -> bool:
+    def cond_fn(state: InterpreterState) -> Array:
         """Condition function which determines whether the simulation should continue."""
-        return (not state.error) and (not state.halt) and (state.cycles < MAX_CYCLE_COUNT)
+        return (~state.error) & (~state.halt) & (state.cycles < MAX_CYCLE_COUNT)
 
     def body_fn(state: InterpreterState) -> InterpreterState:
         """A single step in the Subleq simulation."""
@@ -280,7 +279,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             input_state = state.input_state
             # FIXME: `bytes_used` should also take into account the addresses read from (i.e. values of A, B, C),
             # and also just how many bytes were written to memory to begin with.
-            bytes_used = max(state.cursor_position + 3, state.bytes_used)
+            bytes_used = jnp.maximum(state.cursor_position + 3, state.bytes_used)
 
             # subleq A B C
             a = memory_state[cursor_position]
@@ -299,12 +298,12 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             output_cursor = write_result.output_cursor
 
             # if mem[A] <= 0 { goto mem[C] }
-            execute_jump = value == 0 or value >= word_size / 2
-            cursor_position = c_result.value_read if execute_jump else cursor_position + 3
+            execute_jump = (value == 0) | (value >= word_size / 2)
+            cursor_position = jax.lax.cond(execute_jump, lambda: c_result.value_read, lambda: cursor_position + 3)
 
             # Update input state if anything read from it. Input can advance only by 1 per instruction.
             input_state = jax.lax.cond(
-                a_result.accessed_input or b_result.accessed_input or (execute_jump and c_result.accessed_input),
+                a_result.accessed_input | b_result.accessed_input | (execute_jump & c_result.accessed_input),
                 lambda s: jnp.roll(s, -1).at[s.shape[0] - 1].set(word_size),
                 lambda s: s,
                 input_state,
@@ -312,21 +311,21 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
             halt = (
                 a_result.halt
-                or b_result.halt
-                or (execute_jump and c_result.halt)
-                or write_result.halt
+                | b_result.halt
+                | (execute_jump & c_result.halt)
+                | write_result.halt
                 # Halt on correct output (like in the game).
-                or output_state == test_output
+                | (output_state == test_output).all()
             )
             error = (
                 a_result.error
-                or b_result.error
-                or (execute_jump and c_result.error)
-                or write_result.error
-                or (
+                | b_result.error
+                | (execute_jump & c_result.error)
+                | write_result.error
+                | (
                     # Error on first incorrect output (like in the game).
                     write_result.modified_output
-                    and output_state[output_cursor - 1] != test_output[output_cursor - 1]
+                    & (output_state[output_cursor - 1] != test_output[output_cursor - 1])
                 )
             )
 
@@ -345,7 +344,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         return jax.lax.cond(
             # Check if instruction would try to read out of bounds.
             state.cursor_position + 2 >= word_size,
-            lambda state: state.replace(
+            lambda state: state._replace(
                 cycles=state.cycles + 1,
                 error=True,
             ),
@@ -361,12 +360,6 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             memory_state=memory_state,
             input_state=test_input,
             output_state=jnp.ones_like(test_output),
-            output_cursor=0,
-            cursor_position=0,
-            cycles=0,
-            bytes_used=0,
-            halt=False,
-            error=False,
         ),
     )
     return SubleqSimulateResult(
@@ -374,37 +367,45 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         output_after=after_execution.output_state,
         bytes_used=after_execution.bytes_used,
         cycles_used=after_execution.cycles,
-        correct=(not after_execution.error) and test_output == after_execution.output_state,
+        correct=(~after_execution.error) & (test_output == after_execution.output_state),
     )
 
 
-def get_test_fn(task: SubleqTask) -> SubleqTestFn:
-    # TODO: Do this for many tests
-    test_input: Array
-    test_output: Array
-    match task:
-        case SubleqTask.NEGATION:
+def get_test_fn(task: Array) -> SubleqTestFn:
+    test_input, test_output = jax.lax.switch(
+        task,
+        # TODO: Do this for many tests
+        [
+            # SubleqTask.NEGATION
             # TODO: Have more than one test per task.
-            test_input = jnp.arange(1, 5)
-            test_output = -test_input
-        case _:
-            raise NotImplementedError
+            lambda: (
+                jnp.arange(1, 5, dtype=jnp.int32),
+                -jnp.arange(1, 5, dtype=jnp.int32),
+            )
+        ],
+    )
 
     def test_fn(word_size: int, memory_state: Array) -> SubleqTestResult:
         chex.assert_rank(memory_state, 1)
+        chex.assert_type(memory_state, jnp.int32)
+
+        # FIXME: Padding will have to work a bit differently once we have more tests, but for now it's ok.
+        # Namely, we have to pad each test case individually and stack them.
+        padded_test_input = pad(test_input, MAXIMUM_INPUT_LENGTH, word_size)
+        padded_test_output = pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size)
 
         # TODO: jax.vmap over test cases (maybe do example first, then vmap everything else conditionally on success of example?)
         result = simulate(
             word_size,
             memory_state,
-            pad(test_input, MAXIMUM_INPUT_LENGTH, word_size),
-            pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size),
+            padded_test_input,
+            padded_test_output,
         )
 
         return SubleqTestResult(
             solved=result.correct,  # TODO: should have shape [batch_size], and should depend on the whole test_set?
-            example_input=test_input,  # TODO: change to only take the first
-            example_output=test_output,  # TODO: change to only take the first
+            example_input=padded_test_input,  # TODO: change to only take the first
+            example_output=padded_test_output,  # TODO: change to only take the first
             input_after=result.input_after,  # TODO: change to only take the first
             output_after=result.output_after,  # TODO: change to only take the first
             bytes_used=result.bytes_used,  # TODO: Take the max
@@ -434,14 +435,14 @@ class SubleqState(pgx.State):
     legal_action_mask: Array = jnp.ones(0, dtype=jnp.bool)  # depends on word_size
 
     _step_count: Array = jnp.int32(0)
-    _task: SubleqTask = SubleqTask.NEGATION
-    _test_fn: SubleqTestFn = get_test_fn(SubleqTask.NEGATION)
+    _task: Array = jnp.int32(SubleqTask.NEGATION)
+    _test_fn: SubleqTestFn = get_test_fn(jnp.int32(SubleqTask.NEGATION))
 
     _memory_state: Array = jnp.zeros(0, dtype=jnp.bool)  # depends on word_size
-    _example_input = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
-    _example_output = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
-    _example_input_after = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
-    _example_output_after = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
+    _example_input: Array = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
+    _example_output: Array = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
+    _example_input_after: Array = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
+    _example_output_after: Array = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
     _solved: Array = jnp.bool(False)
 
     @property
@@ -490,23 +491,23 @@ class Subleq(pgx.Env):
         self.token_size = word_size + 1
 
     def _init(self, key: PRNGKey) -> SubleqState:
-        task: SubleqTask = jax.random.choice(key, self.tasks).item()
+        task: Array = jax.random.choice(key, self.tasks)
         legal_action_mask = jnp.ones(self.word_size, dtype=jnp.bool)
         state = SubleqState(
             legal_action_mask=legal_action_mask,
             _task=task,
             _test_fn=get_test_fn(task),
-            _memory_state=jnp.zeros(self.word_size, dtype=jnp.bool),
+            _memory_state=jnp.zeros(self.word_size, dtype=jnp.int32),
         )
         result = state._test_fn(self.word_size, state._memory_state)
-        reward = self.reward_fn(result)
+        rewards = self.reward_fn(result)
         state = state.replace(
             _example_input=result.example_input,
             _example_output=result.example_output,
             _example_input_after=result.input_after,
             _example_output_after=result.output_after,
         )
-        return state.replace(observation=self._observe(state, state.current_player), reward=reward)  # type: ignore
+        return state.replace(observation=self._observe(state, state.current_player), rewards=rewards)  # type: ignore
 
     def _step(self, state: SubleqState, action: Array, key: PRNGKey) -> SubleqState:
         assert isinstance(state, SubleqState)
@@ -519,7 +520,7 @@ class Subleq(pgx.Env):
             # Run the program.
             result = state._test_fn(self.word_size, new_memory_state)
             # Calculate reward.
-            reward = self.reward_fn(result)
+            rewards = self.reward_fn(result)
             # Update properties related to observation.
             state = state.replace(
                 _memory_state=new_memory_state,
@@ -528,11 +529,13 @@ class Subleq(pgx.Env):
                 _example_input_after=result.input_after,
                 _example_output_after=result.output_after,
             )
-            return state.replace(observation=self._observe(state, state.current_player), reward=reward)
+            return state.replace(
+                observation=self._observe(state, state.current_player), rewards=rewards, _solved=result.solved
+            )
 
         return jax.lax.cond(
             state._step_count >= self.word_size or state._solved,
-            lambda state, action: state.replace(terminated=True),
+            lambda state, _action: state.replace(terminated=True),
             execute_step_if_not_terminated,
             state,
             action,
