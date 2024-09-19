@@ -143,19 +143,18 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         """Outcome of reading from memory (or input)."""
 
         value_read: int
-        input_state: Array
         accessed_input: bool
         halt: bool
         error: bool
 
     def read_memory(memory_state: Array, address: int, input_state: Array) -> ReadMemoryResult:
-        default_result = ReadMemoryResult(
-            value_read=0,
-            accessed_input=False,
-            error=False,
-            halt=False,
-        )
+        """
+        Pseudocode:
+
+        ```
         match address:
+            case x if x <= ADDRESS_MAX:
+                return default_result.replace(value_read=memory_state[address])
             case x if x == ADDRESS_IN:
                 # Check if there is any more input left.
                 if input_state[0] >= word_size:
@@ -169,8 +168,36 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 return default_result
             case x if x == ADDRESS_HALT:
                 return default_result.replace(halt=True)
-            case _:
-                return default_result.replace(value_read=memory_state[address])
+        ```
+        """
+        default_result = ReadMemoryResult(
+            value_read=0,
+            accessed_input=False,
+            error=False,
+            halt=False,
+        )
+        branches = (
+            # x <= ADDRESS_MAX
+            [lambda: default_result.replace(value_read=memory_state[address])] * (ADDRESS_MAX + 1)
+            + [
+                # x == ADDRESS_IN
+                lambda: jax.lax.cond(
+                    # Check if there is any more input left.
+                    input_state[0] >= word_size,
+                    lambda: default_result.replace(error=True),
+                    lambda: default_result.replace(
+                        value_read=input_state[0],
+                        accessed_input=True,
+                    ),
+                ),
+                # x == ADDRESS_OUT
+                lambda: default_result,
+                # x == ADDRESS_HALT
+                lambda: default_result.replace(halt=True),
+            ]
+        )
+        assert len(branches) == word_size
+        return jax.lax.switch(address, branches)
 
     class WriteMemoryResult(NamedTuple):
         """Outcome of writing into memory (or output)."""
@@ -185,14 +212,10 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
     def write_memory(
         memory_state: Array, address: int, value: int, output_state: Array, output_cursor: int
     ) -> WriteMemoryResult:
-        default_result = WriteMemoryResult(
-            memory_state=memory_state,
-            output_state=output_state,
-            output_cursor=output_cursor,
-            modified_output=False,
-            halt=False,
-            error=False,
-        )
+        """
+        Pseudocode:
+
+        ```
         match address:
             case x if x == ADDRESS_IN:
                 return default_result
@@ -209,6 +232,39 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 return default_result.replace(halt=True)
             case _:
                 return default_result.replace(memory_state=memory_state.at[address].set(value))
+        ```
+        """
+        default_result = WriteMemoryResult(
+            memory_state=memory_state,
+            output_state=output_state,
+            output_cursor=output_cursor,
+            modified_output=False,
+            halt=False,
+            error=False,
+        )
+        branches = (
+            # x <= ADDRESS_MAX
+            [lambda: default_result.replace(memory_state=memory_state.at[address].set(value))] * (ADDRESS_MAX + 1)
+            + [
+                # x == ADDRESS_IN
+                lambda: default_result,
+                # x == ADDRESS_OUT
+                lambda: jax.lax.cond(
+                    # Check if there is space in the output.
+                    output_cursor >= MAXIMUM_OUTPUT_LENGTH,
+                    lambda: default_result.replace(error=True),
+                    lambda: default_result.replace(
+                        output_state=output_state.at[output_cursor].set(value),
+                        output_cursor=output_cursor + 1,
+                        modified_output=True,
+                    ),
+                ),
+                # x == ADDRESS_HALT
+                lambda: default_result.replace(halt=True),
+            ]
+        )
+        assert len(branches) == word_size
+        return jax.lax.switch(address, branches)
 
     def cond_fn(state: InterpreterState) -> bool:
         """Condition function which determines whether the simulation should continue."""
@@ -216,77 +272,85 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
     def body_fn(state: InterpreterState) -> InterpreterState:
         """A single step in the Subleq simulation."""
-        cursor_position = state.cursor_position
-        cycles = state.cycles + 1
 
-        # Instruction would try to read out of bounds.
-        if cursor_position + 2 >= word_size:
-            return state.replace(  # type: ignore
+        def execute_body_if_in_bounds(state: InterpreterState) -> InterpreterState:
+            cursor_position = state.cursor_position
+            cycles = state.cycles + 1
+            memory_state = state.memory_state
+            input_state = state.input_state
+            # FIXME: `bytes_used` should also take into account the addresses read from (i.e. values of A, B, C),
+            # and also just how many bytes were written to memory to begin with.
+            bytes_used = max(state.cursor_position + 3, state.bytes_used)
+
+            # subleq A B C
+            a = memory_state[cursor_position]
+            b = memory_state[cursor_position + 1]
+            c = memory_state[cursor_position + 2]
+
+            a_result = read_memory(memory_state, a, input_state)
+            b_result = read_memory(memory_state, b, input_state)
+            c_result = read_memory(memory_state, c, input_state)
+
+            # mem[A] = mem[A] - mem[B]
+            value = (a_result.value_read - b_result.value_read) % word_size
+            write_result = write_memory(memory_state, a, value, state.output_state, state.output_cursor)
+            memory_state = write_result.memory_state
+            output_state = write_result.output_state
+            output_cursor = write_result.output_cursor
+
+            # if mem[A] <= 0 { goto mem[C] }
+            execute_jump = value == 0 or value >= word_size / 2
+            cursor_position = c_result.value_read if execute_jump else cursor_position + 3
+
+            # Update input state if anything read from it. Input can advance only by 1 per instruction.
+            input_state = jax.lax.cond(
+                a_result.accessed_input or b_result.accessed_input or (execute_jump and c_result.accessed_input),
+                lambda s: jnp.roll(s, -1).at[s.shape[0] - 1].set(word_size),
+                lambda s: s,
+                input_state,
+            )
+
+            halt = (
+                a_result.halt
+                or b_result.halt
+                or (execute_jump and c_result.halt)
+                or write_result.halt
+                # Halt on correct output (like in the game).
+                or output_state == test_output
+            )
+            error = (
+                a_result.error
+                or b_result.error
+                or (execute_jump and c_result.error)
+                or write_result.error
+                or (
+                    # Error on first incorrect output (like in the game).
+                    write_result.modified_output
+                    and output_state[output_cursor - 1] != test_output[output_cursor - 1]
+                )
+            )
+
+            return InterpreterState(
+                memory_state=memory_state,
+                input_state=input_state,
+                output_state=output_state,
+                output_cursor=output_cursor,
+                cursor_position=cursor_position,
+                bytes_used=bytes_used,
                 cycles=cycles,
+                halt=halt,
+                error=error,
+            )
+
+        return jax.lax.cond(
+            # Check if instruction would try to read out of bounds.
+            state.cursor_position + 2 >= word_size,
+            lambda state: state.replace(
+                cycles=state.cycles + 1,
                 error=True,
-            )
-
-        memory_state = state.memory_state
-        input_state = state.input_state
-        # FIXME: `bytes_used` should also take into account the addresses read from (i.e. values of A, B, C),
-        # and also just how many bytes were written to memory to begin with.
-        bytes_used = max(state.cursor_position + 3, state.bytes_used)
-
-        # subleq A B C
-        a = memory_state[cursor_position]
-        b = memory_state[cursor_position + 1]
-        c = memory_state[cursor_position + 2]
-
-        a_result = read_memory(memory_state, a, input_state)
-        b_result = read_memory(memory_state, b, input_state)
-        c_result = read_memory(memory_state, c, input_state)
-
-        # mem[A] = mem[A] - mem[B]
-        value = (a_result.value_read - b_result.value_read) % word_size
-        write_result = write_memory(memory_state, a, value, state.output_state, state.output_cursor)
-        memory_state = write_result.memory_state
-        output_state = write_result.output_state
-        output_cursor = write_result.output_cursor
-
-        # if mem[A] <= 0 { goto mem[C] }
-        execute_jump = value == 0 or value >= word_size / 2
-        cursor_position = c_result.value_read if execute_jump else cursor_position + 3
-
-        # Update input state if anything read from it. Input can advance only by 1 per instruction.
-        if a_result.accessed_input or b_result.accessed_input or (execute_jump and c_result.accessed_input):
-            input_state = jnp.roll(input_state, -1)
-            input_state = input_state.at[input_state.shape[0] - 1].set(word_size)
-
-        halt = (
-            a_result.halt
-            or b_result.halt
-            or (execute_jump and c_result.halt)
-            or write_result.halt
-            # Halt on correct output (like in the game).
-            or output_state == test_output
-        )
-        error = (
-            a_result.error
-            or b_result.error
-            or (execute_jump and c_result.error)
-            or write_result.error
-            or (
-                # Error on first incorrect output (like in the game).
-                write_result.modified_output
-                and output_state[output_cursor - 1] != test_output[output_cursor - 1]
-            )
-        )
-
-        return InterpreterState(
-            memory_state=memory_state,
-            input_state=input_state,
-            output_state=output_state,
-            output_cursor=output_cursor,
-            cursor_position=cursor_position,
-            bytes_used=bytes_used,
-            cycles=cycles,
-            halt=halt,
-            error=error,
+            ),
+            execute_body_if_in_bounds,
+            state,
         )
 
     # Execute a subleq program.
@@ -468,8 +532,10 @@ class Subleq(pgx.Env):
 
         return jax.lax.cond(
             state._step_count >= self.word_size or state._solved,
-            state.replace(terminated=True),
-            execute_step_if_not_terminated(state, action),
+            lambda state, action: state.replace(terminated=True),
+            execute_step_if_not_terminated,
+            state,
+            action,
         )
 
     def _observe(self, state: pgx.State, player_id: Array) -> Array:
