@@ -42,7 +42,6 @@ def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
     chex.assert_rank(arr, 1)
     indices = jnp.where(arr == word_size, arr % word_size, word_size)
     shape = (arr.shape[0], word_size + 1)
-    # TODO: Check if this should not have `jnp.arange(indices.shape[0])` instead of `:`.
     output = jnp.zeros(shape, dtype=jnp.bool).at[:, indices].set(True, unique_indices=True)
     chex.assert_shape(output, shape)
     return output
@@ -373,7 +372,15 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 def get_test_cases(task: Array) -> tuple[Array, Array]:
     """Get the test cases for a given task."""
     # TODO: Implement test cases for other tasks.
-    # TODO: Have more than one test per task. (Will also require changing test)
+    # TODO: Have more than one test per task. (Will also require changing run_test)
+    # TODO:
+    # What I have in mind is an array of size [test_cases, MAX_INPUT_LENGTH] for the inputs
+    # and [test_cases, MAX_OUTPUT_LENGTH] for the outputs. The `pad` function can be used to
+    # create appropriate padding for the inputs/outputs.
+    # Then, in `run_tests` we should first run the example (i.e. test_input[0] and test_output[0]),
+    # and if it passes run every other test in parallel with jax.vmap() over the rows of test_input, test_output.
+    # Statistics from the tests should be combined (e.g. correct.all(), and bytes_used.max()),
+    # but there are other TODO notes there to explain so I will skip it here.
     negation_input = jnp.arange(1, 5, dtype=jnp.int32)
     return jax.lax.switch(
         task,
@@ -426,7 +433,7 @@ def lowest_bytes(execution_result: SubleqTestResult) -> Array:
 
 @dataclass
 class SubleqState(pgx.State):
-    observation: Array = jnp.zeros((0,0), dtype=jnp.bool)  # depends on word_size
+    observation: Array = jnp.zeros((0, 0), dtype=jnp.bool)  # depends on word_size
     current_player: Array = jnp.int32(0)
     rewards: Array = jnp.float32([0.0])
     terminated: Array = jnp.bool(False)
