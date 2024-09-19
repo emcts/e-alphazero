@@ -45,9 +45,9 @@ def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
     special tokens used to fill up input/output so that the size is always the same.
     """
     chex.assert_rank(arr, 1)
-    indices = jnp.where(arr == word_size, arr % word_size, word_size)
+    indices = jnp.where(arr == word_size, word_size, arr % word_size)
     shape = (arr.shape[0], word_size + 1)
-    output = jnp.zeros(shape, dtype=jnp.bool).at[:, indices].set(True, unique_indices=True)
+    output = jnp.zeros(shape, dtype=jnp.bool).at[jnp.arange(shape[0]), indices].set(True, unique_indices=True)
     chex.assert_shape(output, shape)
     return output
 
