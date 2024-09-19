@@ -412,7 +412,7 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
     # TODO: Add more tests to each task as required.
 
     return jax.lax.switch(
-        task,
+        task - 1,  # Enums start at 1.
         [
             # SubleqTask.NEGATION
             lambda: (
