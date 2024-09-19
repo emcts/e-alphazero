@@ -498,22 +498,28 @@ class Subleq(pgx.Env):
 
     def _init(self, key: PRNGKey) -> SubleqState:
         task: Array = jax.random.choice(key, self.tasks)
-        legal_action_mask = jnp.ones(self.word_size, dtype=jnp.bool)
-        state = SubleqState(
+        # At every step all actions (any byte) is valid.
+        legal_action_mask = jnp.ones((self.word_size,), dtype=jnp.bool)
+        # Get the test cases for the task.
+        test_cases = get_test_cases(task)
+        # Initialize an empty memory state (all zeroes).
+        memory_state = jnp.zeros(self.word_size, dtype=jnp.int32)
+        # Check if the empty program solves the tests, and what the result of running it on the example looks like.
+        result = run_tests(self.word_size, memory_state, test_cases[0], test_cases[1])
+        rewards = jnp.atleast_1d(self.reward_fn(result))
+        chex.assert_shape(rewards, (1,))
+        return SubleqState(  # type: ignore
             legal_action_mask=legal_action_mask,
             _task=task,
-            _test_cases=get_test_cases(task),
-            _memory_state=jnp.zeros(self.word_size, dtype=jnp.int32),
-        )
-        result = run_tests(self.word_size, state._memory_state, state._test_cases[0], state._test_cases[1])
-        rewards = self.reward_fn(result)
-        state = state.replace(  # type: ignore
+            _test_cases=test_cases,
+            _memory_state=memory_state,
             _example_input=result.example_input,
             _example_output=result.example_output,
             _example_input_after=result.input_after,
             _example_output_after=result.output_after,
+            rewards=rewards,
+            _solved=result.solved,
         )
-        return state.replace(observation=self._observe(state, state.current_player), rewards=rewards)  # type: ignore
 
     def _step(self, state: SubleqState, action: Array, key: PRNGKey) -> SubleqState:
         assert isinstance(state, SubleqState)
@@ -525,17 +531,17 @@ class Subleq(pgx.Env):
             # Run the program.
             result = run_tests(self.word_size, new_memory_state, state._test_cases[0], state._test_cases[1])
             # Calculate reward.
-            rewards = self.reward_fn(result)
-            # Update properties related to observation.
-            state = state.replace(  # type: ignore
+            rewards = jnp.atleast_1d(self.reward_fn(result))
+            chex.assert_shape(rewards, (1,))
+            # Update memory, input/output after execution, rewards, and whether the program solves the problem.
+            return state.replace(  # type: ignore
                 _memory_state=new_memory_state,
                 _example_input=result.example_input,
                 _example_output=result.example_output,
                 _example_input_after=result.input_after,
                 _example_output_after=result.output_after,
-            )
-            return state.replace(  # type: ignore
-                observation=self._observe(state, state.current_player), rewards=rewards, _solved=result.solved
+                rewards=rewards,
+                _solved=result.solved,
             )
 
         return jax.lax.cond(
