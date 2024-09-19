@@ -426,22 +426,22 @@ def lowest_bytes(execution_result: SubleqTestResult) -> Array:
 
 @dataclass
 class SubleqState(pgx.State):
-    observation: Array = jnp.zeros(0, dtype=jnp.bool)  # depends on word_size
+    observation: Array = jnp.zeros((0,0), dtype=jnp.bool)  # depends on word_size
     current_player: Array = jnp.int32(0)
     rewards: Array = jnp.float32([0.0])
     terminated: Array = jnp.bool(False)
     truncated: Array = jnp.bool(False)
-    legal_action_mask: Array = jnp.ones(0, dtype=jnp.bool)  # depends on word_size
+    legal_action_mask: Array = jnp.ones((0,), dtype=jnp.bool)  # depends on word_size
 
     _step_count: Array = jnp.int32(0)
     _task: Array = jnp.int32(SubleqTask.NEGATION)
     _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION))
 
-    _memory_state: Array = jnp.zeros(0, dtype=jnp.bool)  # depends on word_size
-    _example_input: Array = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
-    _example_output: Array = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
-    _example_input_after: Array = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
-    _example_output_after: Array = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
+    _memory_state: Array = jnp.zeros((0,), dtype=jnp.bool)  # depends on word_size
+    _example_input: Array = jnp.zeros((MAXIMUM_INPUT_LENGTH,), dtype=jnp.int32)
+    _example_output: Array = jnp.zeros((MAXIMUM_OUTPUT_LENGTH,), dtype=jnp.int32)
+    _example_input_after: Array = jnp.zeros((MAXIMUM_INPUT_LENGTH,), dtype=jnp.int32)
+    _example_output_after: Array = jnp.zeros((MAXIMUM_OUTPUT_LENGTH,), dtype=jnp.int32)
     _solved: Array = jnp.bool(False)
 
     @property
