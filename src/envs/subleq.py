@@ -1,4 +1,5 @@
 from enum import IntEnum, auto
+from functools import partial
 from typing import Callable, NamedTuple
 import chex
 import jax
@@ -16,6 +17,10 @@ MAXIMUM_INPUT_LENGTH = 8
 MAXIMUM_OUTPUT_LENGTH = MAXIMUM_INPUT_LENGTH
 # Terminate the program if it does more than this many cycles.
 MAX_CYCLE_COUNT = 200
+
+# "Nice to have" assumptions to make test cases easier to make.
+assert MAXIMUM_INPUT_LENGTH >= 8
+assert MAXIMUM_OUTPUT_LENGTH >= 8
 
 
 def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
@@ -124,7 +129,9 @@ SubleqTestFn = Callable[[int, Array], SubleqTestResult]
 
 def simulate(word_size: int, memory_state: Array, test_input: Array, test_output: Array) -> SubleqSimulateResult:
     """Simulate the program given in the memory state for a specific test input and output."""
-    chex.assert_rank([memory_state, test_input, test_output], 1)
+    chex.assert_shape(
+        [memory_state, test_input, test_output], [(word_size,), (MAXIMUM_INPUT_LENGTH,), (MAXIMUM_OUTPUT_LENGTH,)]
+    )
     chex.assert_type([memory_state, test_input, test_output], jnp.int32)
     ADDRESS_MAX = word_size - 4  # Maximum user-modifiable address
     ADDRESS_IN = word_size - 3  # Reads a value from input (writes are ignored)
@@ -357,8 +364,12 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         InterpreterState(
             memory_state=memory_state,
             input_state=test_input,
-            output_state=jnp.ones_like(test_output),
+            output_state=word_size * jnp.ones_like(test_output),
         ),
+    )
+    chex.assert_shape(
+        [after_execution.input_state, after_execution.output_state],
+        [(MAXIMUM_INPUT_LENGTH,), (MAXIMUM_OUTPUT_LENGTH,)],
     )
     return SubleqSimulateResult(
         input_after=after_execution.input_state,
@@ -369,55 +380,96 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
     )
 
 
-def get_test_cases(task: Array) -> tuple[Array, Array]:
+def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
     """Get the test cases for a given task."""
-    # TODO: Implement test cases for other tasks.
-    # TODO: Have more than one test per task. (Will also require changing run_test)
-    # TODO:
-    # What I have in mind is an array of size [test_cases, MAX_INPUT_LENGTH] for the inputs
-    # and [test_cases, MAX_OUTPUT_LENGTH] for the outputs. The `pad` function can be used to
-    # create appropriate padding for the inputs/outputs.
-    # Then, in `run_tests` we should first run the example (i.e. test_input[0] and test_output[0]),
-    # and if it passes run every other test in parallel with jax.vmap() over the rows of test_input, test_output.
-    # Statistics from the tests should be combined (e.g. correct.all(), and bytes_used.max()),
-    # but there are other TODO notes there to explain so I will skip it here.
-    negation_input = jnp.arange(1, 5, dtype=jnp.int32)
+
+    def prepare(inputs_or_outputs: list[Array], length) -> Array:
+        """Modulo, pad, and stack the test cases."""
+        return jnp.stack(jax.tree.map(lambda x: pad(x % word_size, length, word_size), inputs_or_outputs))
+
+    negation_inputs = [
+        jnp.arange(1, MAXIMUM_INPUT_LENGTH, dtype=jnp.int32),
+        jnp.arange(-MAXIMUM_INPUT_LENGTH // 2, MAXIMUM_INPUT_LENGTH // 2, dtype=jnp.int32),
+        jnp.array([0, -1, 2, -3, 4], dtype=jnp.int32),
+    ]
+    negation_outputs = jax.tree.map(lambda x: -x, negation_inputs)
+
+    identity_inputs = negation_inputs
+    identity_outputs = identity_inputs
+
+    subtraction_inputs = [
+        jnp.array([1, 1, 5, 4, 0, -3]),
+        jnp.array([2, 3, 0, 0, -1, -2]),
+        jnp.array([1, 2, 3, 4, 4, 3, 2, 1]),
+    ]
+    subtraction_outputs = [
+        jnp.array([0, 1, 3]),
+        jnp.array([-1, 0, 1]),
+        jnp.array([-1, -1, 1, 1]),
+    ]
+
+    # TODO: Add other tasks.
+    # TODO: Add more tests to each task as required.
+
     return jax.lax.switch(
         task,
         [
             # SubleqTask.NEGATION
-            lambda: (negation_input, -negation_input)
+            lambda: (
+                prepare(negation_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(negation_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
+            # SubleqTask.IDENTITY
+            lambda: (
+                prepare(identity_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(identity_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
+            # SubleqTask.SUBTRACTION
+            lambda: (
+                prepare(subtraction_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(subtraction_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
+            # SubleqTask.ADDITION
+            # SubleqTask.MAXIMUM
+            # SubleqTask.MINIMUM
+            # SubleqTask.COMPARISON
+            # SubleqTask.SORT_2
+            # SubleqTask.SORT_3
+            # SubleqTask.SORT_4
+            # SubleqTask.MULTIPLICATION
+            # SubleqTask.DIVISION
         ],
     )
 
 
 def run_tests(word_size: int, memory_state: Array, test_input: Array, test_output: Array) -> SubleqTestResult:
     """Run the program against a test-set, i.e. (test_input, test_output)."""
-    chex.assert_rank(memory_state, 1)
-    chex.assert_type(memory_state, jnp.int32)
+    chex.assert_rank([memory_state, test_input, test_output], [1, 2, 2])
+    chex.assert_type([memory_state, test_input, test_output], jnp.int32)
 
-    # FIXME: Padding will have to work a bit differently once we have more tests, but for now it's ok.
-    # Namely, we have to pad each test case individually and stack them.
-    # Maybe padding should be done in `get_test_cases`.
-    padded_test_input = pad(test_input, MAXIMUM_INPUT_LENGTH, word_size)
-    padded_test_output = pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size)
-
-    # TODO: jax.vmap over test cases (maybe do example first, then vmap everything else conditionally on success of example?)
-    result = simulate(
+    # Run all test cases in parallel.
+    test_count = test_input.shape[0]
+    results = jax.vmap(simulate, [None, None, 0, 0])(
         word_size,
         memory_state,
-        padded_test_input,
-        padded_test_output,
+        test_input,
+        test_output,
     )
 
+    chex.assert_shape(
+        [results.input_after, results.output_after],
+        [(test_count, MAXIMUM_INPUT_LENGTH), (test_count, MAXIMUM_OUTPUT_LENGTH)],
+    )
+    chex.assert_shape([results.correct, results.bytes_used, results.cycles_used], (test_count,))
+
     return SubleqTestResult(
-        solved=result.correct,  # TODO: should have shape [batch_size], and should depend on the whole test_set?
-        example_input=padded_test_input,  # TODO: change to only take the first
-        example_output=padded_test_output,  # TODO: change to only take the first
-        input_after=result.input_after,  # TODO: change to only take the first
-        output_after=result.output_after,  # TODO: change to only take the first
-        bytes_used=result.bytes_used,  # TODO: Take the max
-        cycles_used=result.cycles_used,  # TODO: Take the max
+        solved=results.correct.all(),
+        example_input=test_input[0],
+        example_output=test_output[0],
+        input_after=results.input_after[0],
+        output_after=results.output_after[0],
+        bytes_used=results.bytes_used.max(),
+        cycles_used=results.cycles_used.max(),
     )
 
 
@@ -442,7 +494,7 @@ class SubleqState(pgx.State):
 
     _step_count: Array = jnp.int32(0)
     _task: Array = jnp.int32(SubleqTask.NEGATION)
-    _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION))
+    _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION), 16)
 
     _memory_state: Array = jnp.zeros((0,), dtype=jnp.bool)  # depends on word_size
     _example_input: Array = jnp.zeros((MAXIMUM_INPUT_LENGTH,), dtype=jnp.int32)
@@ -488,7 +540,7 @@ class Subleq(pgx.Env):
     def __init__(
         self, tasks: list[SubleqTask], word_size: int = 256, reward_fn: SubleqRewardFn = solved_or_not
     ) -> None:
-        assert 8 <= word_size <= 256
+        assert 16 <= word_size <= 256
         super().__init__()
         self.tasks = jnp.array(tasks)
         self.reward_fn = reward_fn
@@ -501,7 +553,7 @@ class Subleq(pgx.Env):
         # At every step all actions (any byte) is valid.
         legal_action_mask = jnp.ones((self.word_size,), dtype=jnp.bool)
         # Get the test cases for the task.
-        test_cases = get_test_cases(task)
+        test_cases = get_test_cases(task, self.word_size)
         # Initialize an empty memory state (all zeroes).
         memory_state = jnp.zeros(self.word_size, dtype=jnp.int32)
         # Check if the empty program solves the tests, and what the result of running it on the example looks like.
@@ -554,6 +606,22 @@ class Subleq(pgx.Env):
 
     def _observe(self, state: pgx.State, player_id: Array) -> Array:
         assert isinstance(state, SubleqState)
+        chex.assert_shape(
+            [
+                state._memory_state,
+                state._example_input,
+                state._example_input_after,
+                state._example_output,
+                state._example_output_after,
+            ],
+            [
+                (self.word_size,),
+                (MAXIMUM_INPUT_LENGTH,),
+                (MAXIMUM_INPUT_LENGTH,),
+                (MAXIMUM_OUTPUT_LENGTH,),
+                (MAXIMUM_OUTPUT_LENGTH,),
+            ],
+        )
         observation = jnp.concatenate(
             [
                 subleq_words_to_observation(state._memory_state, self.word_size),
@@ -563,8 +631,9 @@ class Subleq(pgx.Env):
                 subleq_words_to_observation(state._example_output_after, self.word_size),
             ]
         )
-        chex.assert_axis_dimension(observation, 0, self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH))
-        chex.assert_axis_dimension(observation, 1, self.token_size)
+        chex.assert_shape(
+            observation, [self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH), self.token_size]
+        )
         return observation
 
     @property
