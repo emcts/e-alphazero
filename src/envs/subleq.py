@@ -8,9 +8,14 @@ from pgx._src.struct import dataclass  # type: ignore
 
 from type_aliases import Array, PRNGKey
 
+# Environment ID (for pgx).
 ENV_ID = "subleq"
+# The maximum size of any test input. Effects the size of the observation.
 MAXIMUM_INPUT_LENGTH = 8
+# The maximum size of any test output. Effects the size of the observation.
 MAXIMUM_OUTPUT_LENGTH = MAXIMUM_INPUT_LENGTH
+# Terminate the program if it does more than this many cycles.
+MAX_CYCLE_COUNT = 200
 
 
 def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
@@ -85,8 +90,9 @@ class SubleqTask(IntEnum):
 
 
 class SubleqTestResult(NamedTuple):
-    solved: Array
+    """Outcome of testing a program against the whole test set."""
 
+    solved: Array
     # The first test case
     example_input: Array
     example_output: Array
@@ -99,6 +105,8 @@ class SubleqTestResult(NamedTuple):
 
 
 class SubleqSimulateResult(NamedTuple):
+    """Outcome of a program simulation on a single input."""
+
     input_after: Array
     output_after: Array
     bytes_used: Array
@@ -111,14 +119,16 @@ SubleqTestFn = Callable[[int, Array], SubleqTestResult]
 
 
 def simulate(word_size: int, memory_state: Array, test_input: Array, test_output: Array) -> SubleqSimulateResult:
+    """Simulate the program given in the memory state for a specific test input and output."""
     chex.assert_rank([memory_state, test_input, test_output], 1)
     ADDRESS_MAX = word_size - 4  # Maximum user-modifiable address
     ADDRESS_IN = word_size - 3  # Reads a value from input (writes are ignored)
     ADDRESS_OUT = word_size - 2  # Writes a result to output (reads as zero)
     ADDRESS_HALT = word_size - 1  # Terminates the program when accessed (reads and write are ignored)
-    MAX_CYCLE_COUNT = 200  # Terminate the program if it does more than this many cycles.
 
     class InterpreterState(NamedTuple):
+        """State of the interpreter at any point in the simulation."""
+
         memory_state: Array
         input_state: Array
         output_state: Array
@@ -130,6 +140,8 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
         error: bool
 
     class ReadMemoryResult(NamedTuple):
+        """Outcome of reading from memory (or input)."""
+
         value_read: int
         input_state: Array
         accessed_input: bool
@@ -161,6 +173,8 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 return default_result.replace(value_read=memory_state[address])
 
     class WriteMemoryResult(NamedTuple):
+        """Outcome of writing into memory (or output)."""
+
         memory_state: Array
         output_state: Array
         output_cursor: int
@@ -197,9 +211,11 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
                 return default_result.replace(memory_state=memory_state.at[address].set(value))
 
     def cond_fn(state: InterpreterState) -> bool:
+        """Condition function which determines whether the simulation should continue."""
         return (not state.error) and (not state.halt) and (state.cycles < MAX_CYCLE_COUNT)
 
     def body_fn(state: InterpreterState) -> InterpreterState:
+        """A single step in the Subleq simulation."""
         cursor_position = state.cursor_position
         cycles = state.cycles + 1
 
@@ -212,6 +228,8 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
         memory_state = state.memory_state
         input_state = state.input_state
+        # FIXME: `bytes_used` should also take into account the addresses read from (i.e. values of A, B, C),
+        # and also just how many bytes were written to memory to begin with.
         bytes_used = max(state.cursor_position + 3, state.bytes_used)
 
         # subleq A B C
@@ -271,6 +289,7 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
             error=error,
         )
 
+    # Execute a subleq program.
     after_execution = jax.lax.while_loop(
         cond_fn,
         body_fn,
@@ -301,6 +320,7 @@ def get_test_fn(task: SubleqTask) -> SubleqTestFn:
     test_output: Array
     match task:
         case SubleqTask.NEGATION:
+            # TODO: Have more than one test per task.
             test_input = jnp.arange(1, 5)
             test_output = -test_input
         case _:
@@ -314,17 +334,17 @@ def get_test_fn(task: SubleqTask) -> SubleqTestFn:
             word_size,
             memory_state,
             pad(test_input, MAXIMUM_INPUT_LENGTH, word_size),
-            pad(test_output, MAXIMUM_INPUT_LENGTH, word_size),
+            pad(test_output, MAXIMUM_OUTPUT_LENGTH, word_size),
         )
 
         return SubleqTestResult(
-            solved=jnp.zeros(1),  # TODO: should have shape [batch_size]
+            solved=result.correct,  # TODO: should have shape [batch_size], and should depend on the whole test_set?
             example_input=test_input,  # TODO: change to only take the first
             example_output=test_output,  # TODO: change to only take the first
             input_after=result.input_after,  # TODO: change to only take the first
             output_after=result.output_after,  # TODO: change to only take the first
             bytes_used=result.bytes_used,  # TODO: Take the max
-            cycles_used=result.cycles_used,  # TODO: Change the max
+            cycles_used=result.cycles_used,  # TODO: Take the max
         )
 
     return test_fn
@@ -333,6 +353,11 @@ def get_test_fn(task: SubleqTask) -> SubleqTestFn:
 def solved_or_not(execution_result: SubleqTestResult) -> Array:
     """Simplest reward function which just gives 1 if the program solves all the tests, and 0 otherwise."""
     return execution_result.solved.astype(jnp.float32)
+
+
+def lowest_bytes(execution_result: SubleqTestResult) -> Array:
+    """Prioritizes solutions which use the fewest amount of bytes. `solved / (1 + bytes_used)`"""
+    return execution_result.solved.astype(jnp.float32) / (1 + execution_result.bytes_used)
 
 
 @dataclass
@@ -353,6 +378,7 @@ class SubleqState(pgx.State):
     _example_output = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
     _example_input_after = jnp.zeros(MAXIMUM_INPUT_LENGTH, dtype=jnp.int32)
     _example_output_after = jnp.zeros(MAXIMUM_OUTPUT_LENGTH, dtype=jnp.int32)
+    _solved: Array = jnp.bool(False)
 
     @property
     def env_id(self) -> pgx.EnvId:
@@ -364,8 +390,28 @@ class Subleq(pgx.Env):
     """
     Reference description of Subleq: https://github.com/jaredkrinke/sic1/blob/master/sic1-assembly.md
 
-    Every subleq task is a different programming challenge, and each is treated as a separate environment.
-    The state the agent observes is the
+    Every subleq task is a different programming challenge, and each set of tasks is a separate Subleq environment.
+    The environment is also parametrized by the word size N, which determines how many possible values a word can take.
+    Since we use one-hot encoding, it is also related to the row size of the observation.
+
+    At each step the agent writes a single word into the memory. It has exactly N choices, as that is the word size.
+    The program is tested after each byte is written to see if it solves the problem. The input and output
+    after execution on the example input is included in the observation. The reward received is determined by a function
+    of the test results, and it is a parameter of the environment.
+
+    The state the agent observes is composed of:
+    - Memory state before execution (i.e. the code).    [N,                     N + 1]
+    - Example input.                                    [MAXIMUM_INPUT_LENGTH,  N + 1]
+    - Example output.                                   [MAXIMUM_OUTPUT_LENGTH, N + 1]
+    - Input after execution.                            [MAXIMUM_INPUT_LENGTH,  N + 1]
+    - Output after execution.                           [MAXIMUM_OUTPUT_LENGTH, N + 1]
+
+    Final shape: [N + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH), N + 1]
+
+    The row size is N+1 to allow for a special token (value or position = N) which indicates empty or missing.
+    This is needed because the input and output may not be full, and we need to distinguish from normal values.
+
+    A possible input is `[1, 2, 3, _, _, _]`, so we need a column to represent `_`. Same goes for output.
     """
 
     def __init__(
@@ -379,18 +425,9 @@ class Subleq(pgx.Env):
         # Words are one-hot encoded, with an extra column for a special token used to fill out input/output.
         self.token_size = word_size + 1
 
-        # TODO: Remove this
-        self.special_address_in = word_size - 3  # Reading from this address accesses the input (writes are ignored).
-        self.special_address_out = word_size - 2  # Writing to this address writes to output (reads as zero).
-        self.special_address_halt = word_size - 1  # Terminates the program when accessed.
-
     def _init(self, key: PRNGKey) -> SubleqState:
         task: SubleqTask = jax.random.choice(key, self.tasks).item()
-
-        rows = self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH)
-        observation = jnp.zeros([rows, self.token_size], dtype=jnp.bool)
         legal_action_mask = jnp.ones(self.word_size, dtype=jnp.bool)
-
         state = SubleqState(
             legal_action_mask=legal_action_mask,
             _task=task,
@@ -399,20 +436,41 @@ class Subleq(pgx.Env):
         )
         result = state._test_fn(self.word_size, state._memory_state)
         reward = self.reward_fn(result)
-
+        state = state.replace(
+            _example_input=result.example_input,
+            _example_output=result.example_output,
+            _example_input_after=result.input_after,
+            _example_output_after=result.output_after,
+        )
         return state.replace(observation=self._observe(state, state.current_player), reward=reward)  # type: ignore
 
     def _step(self, state: SubleqState, action: Array, key: PRNGKey) -> SubleqState:
         assert isinstance(state, SubleqState)
+        chex.assert_rank([state.observation, state._memory_state, action], [2, 1, 1])
 
-        # TODO: Add a byte to the memory state (terminate if full, i.e. step_count == word_size or similar)
-        new_memory_state = state._memory_state
+        def execute_step_if_not_terminated(state: SubleqState, action: Array) -> SubleqState:
+            # Add a byte to the memory state.
+            word_to_write = jnp.argmax(action, axis=1)
+            new_memory_state = state._memory_state.at[state._step_count - 1].set(word_to_write)
+            # Run the program.
+            result = state._test_fn(self.word_size, new_memory_state)
+            # Calculate reward.
+            reward = self.reward_fn(result)
+            # Update properties related to observation.
+            state = state.replace(
+                _memory_state=new_memory_state,
+                _example_input=result.example_input,
+                _example_output=result.example_output,
+                _example_input_after=result.input_after,
+                _example_output_after=result.output_after,
+            )
+            return state.replace(observation=self._observe(state, state.current_player), reward=reward)
 
-        result = state._test_fn(self.word_size, state._memory_state)
-        reward = self.reward_fn(result)
-
-        state = state.replace(_memory_state=new_memory_state)
-        return state.replace(observation=self._observe(state, state.current_player), reward=reward)  # type: ignore
+        return jax.lax.cond(
+            state._step_count >= self.word_size or state._solved,
+            state.replace(terminated=True),
+            execute_step_if_not_terminated(state, action),
+        )
 
     def _observe(self, state: pgx.State, player_id: Array) -> Array:
         assert isinstance(state, SubleqState)
@@ -425,6 +483,8 @@ class Subleq(pgx.Env):
                 subleq_words_to_observation(state._example_output_after, self.word_size),
             ]
         )
+        chex.assert_axis_dimension(observation, 0, self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH))
+        chex.assert_axis_dimension(observation, 1, self.token_size)
         return observation
 
     @property
