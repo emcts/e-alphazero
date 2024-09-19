@@ -586,7 +586,7 @@ class Subleq(pgx.Env):
             )
 
         return jax.lax.cond(
-            (state._step_count >= self.word_size) | state._solved,
+            (state._step_count >= self.word_size - 3) | state._solved,
             lambda state, _action: state.replace(terminated=True, rewards=jnp.zeros_like(state.rewards)),
             execute_step_if_not_terminated,
             state,
