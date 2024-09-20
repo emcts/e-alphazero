@@ -84,6 +84,7 @@ def pad(array: Array, desired_size: int, word_size: int) -> Array:
 
 
 class SubleqTask(IntEnum):
+    NEGATION_POSITIVE = auto()
     NEGATION = auto()
     IDENTITY = auto()
     SUBTRACTION = auto()
@@ -371,14 +372,22 @@ def simulate(word_size: int, memory_state: Array, test_input: Array, test_output
 
 def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
     """Get the test cases for a given task."""
+    assert word_size >= 16
 
     def prepare(inputs_or_outputs: list[Array], length) -> Array:
         """Modulo, pad, and stack the test cases."""
         return jnp.stack(jax.tree.map(lambda x: pad(x % word_size, length, word_size), inputs_or_outputs))
 
-    negation_inputs = [
+    negation_positive_inputs = [
         jnp.arange(1, MAXIMUM_INPUT_LENGTH, dtype=jnp.int32),
+        jnp.array([5, 4, 4, 5, 1, 2, 3, 1]),
+        jnp.array([1, 1, 6, 2, 4, 4, 5, 3]),
+    ]
+    negation_positive_outputs = jax.tree.map(lambda x: -x, negation_positive_inputs)
+
+    negation_inputs = [
         jnp.arange(-MAXIMUM_INPUT_LENGTH // 2, MAXIMUM_INPUT_LENGTH // 2, dtype=jnp.int32),
+        jnp.arange(1, MAXIMUM_INPUT_LENGTH, dtype=jnp.int32),
         jnp.array([0, -1, 2, -3, 4], dtype=jnp.int32),
     ]
     negation_outputs = jax.tree.map(lambda x: -x, negation_inputs)
@@ -403,6 +412,11 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
     return jax.lax.switch(
         task - 1,  # Enums start at 1.
         [
+            # SubleqTask.NEGATION_POSITIVE
+            lambda: (
+                prepare(negation_positive_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(negation_positive_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
             # SubleqTask.NEGATION
             lambda: (
                 prepare(negation_inputs, MAXIMUM_INPUT_LENGTH),
@@ -482,8 +496,8 @@ class SubleqState(pgx.State):
     legal_action_mask: Array = jnp.ones((0,), dtype=jnp.bool)  # depends on word_size
 
     _step_count: Array = jnp.int32(0)
-    _task: Array = jnp.int32(SubleqTask.NEGATION)
-    _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION), 16)
+    _task: Array = jnp.int32(SubleqTask.NEGATION_POSITIVE)
+    _test_cases: tuple[Array, Array] = get_test_cases(jnp.int32(SubleqTask.NEGATION_POSITIVE), 16)
 
     _memory_state: Array = jnp.zeros((0,), dtype=jnp.bool)  # depends on word_size
     _example_input: Array = jnp.zeros((MAXIMUM_INPUT_LENGTH,), dtype=jnp.int32)

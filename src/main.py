@@ -159,7 +159,7 @@ def main() -> None:
             word_size = int(s) if s.isnumeric() else 256
             # TODO: Make tasks configurable with command line args
             # TODO: Make reward function configurable with command line args
-            env = Subleq([SubleqTask.NEGATION], word_size)
+            env = Subleq([SubleqTask.NEGATION_POSITIVE], word_size)
         case ("pgx", env_id) if env_id in pgx.available_envs():
             if "minatar" in env_id:
                 env = TimeoutTerminationWrapper(pgx.make(env_id), timelimit=config.max_episode_length)
