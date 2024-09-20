@@ -122,6 +122,8 @@ def setup_config(config: Config) -> Config:
     elif "subleq" in config.env_id:
         config.discount = 0.97
         config.max_episode_length = 10
+        config.max_replay_buffer_length = 100000
+        config.selfplay_batch_size = 128
     else:
         print(f"Setting up an environment without unique config setup")
 

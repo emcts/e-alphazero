@@ -110,7 +110,7 @@ def pad(array: Array, desired_size: int, word_size: int) -> Array:
 class SubleqTask(IntEnum):
     NEGATION_POSITIVE = auto()
     NEGATION = auto()
-    IDENTITY = auto()
+    IDENTITY = auto()   # Known min solution length: 6
     SUBTRACTION = auto()
     ADDITION = auto()
     MAXIMUM = auto()

@@ -145,7 +145,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                                                                 for subleq_task in subleq_tasks:
                                                                     for _ in range(num_seeds):
                                                                         # Compute runtime
-                                                                        runtime = maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
+                                                                        runtime = 4 # maximum_number_of_iterations / 100  # td3 is about 1:10 hours per 1m steps, so this is in hours
                                                                         if runtime <= 4:
                                                                             qos = "short"
                                                                         elif runtime <= 24:
@@ -196,7 +196,7 @@ purpose = "Verifying deep sea"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"
 true_results_path = "/tudelft.net/staff-umbrella/inadequate/emctx/results"
 local_results_path = "/home/yaniv"
-maximum_number_of_iterations = 350
+maximum_number_of_iterations = 2000
 exploration_betas = [1.0]
 exploitation_betas = [0.0]
 learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
