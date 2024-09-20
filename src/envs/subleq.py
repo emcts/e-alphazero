@@ -40,12 +40,24 @@ def subleq_words_to_observation_one_hot(arr: Array, word_size: int) -> Array:
      [0, 0, 0, 0, 0, 0, 0, 0, 1]]
     ```
     The resulting shape for an input array size `n` will be `(n, word_size + 1)`.
+
+    Note that a negative number `-x` is treated as `word_size - x`
+    since they are the same in `word_size`-modular arithmetic.
+
+    Numbers which equal `word_size` are treated differently since they represent
+    special tokens used to fill up input/output so that the size is always the same.
+    For those tokens, the last column is 1.
     """
+    chex.assert_rank(arr, 1)
     indices = jnp.where(arr == word_size, word_size, arr % word_size)
     shape = (arr.shape[0], word_size + 1)
     output = jnp.zeros(shape, dtype=jnp.bool).at[jnp.arange(shape[0]), indices].set(True, unique_indices=True)
     chex.assert_shape(output, shape)
     return output
+
+
+def binary_encoding_width(word_size: int) -> int:
+    return (word_size - 1).bit_length() + 1
 
 
 def subleq_words_to_observation_binary(arr: Array, word_size: int) -> Array:
@@ -65,22 +77,6 @@ def subleq_words_to_observation_binary(arr: Array, word_size: int) -> Array:
      [0, 0, 0, 0, 1]]
     ```
     The resulting shape for an input array size `n` will be `(n, word_size.bit_length() + 1)`.
-    """
-    bit_length = (word_size - 1).bit_length()
-    shape = (arr.shape[0], bit_length + 1)
-    modulo = (arr % word_size).astype(jnp.uint8)
-    unpacked = jnp.unpackbits(modulo[:, jnp.newaxis], axis=1, count=shape[1], bitorder="little")
-    chex.assert_shape(unpacked, shape)
-    output = (unpacked > 0).at[arr == word_size, bit_length].set(True)
-    chex.assert_shape(output, shape)
-    return output
-
-
-def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
-    """
-    Convert from Subleq words to an encoded array.
-
-    See `subleq_words_to_observation_one_hot` and `subleq_words_to_observation_binary`.
 
     Note that a negative number `-x` is treated as `word_size - x`
     since they are the same in `word_size`-modular arithmetic.
@@ -90,29 +86,15 @@ def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
     For those tokens, the last column is 1.
     """
     chex.assert_rank(arr, 1)
-    # return subleq_words_to_observation_binary(arr, word_size)
-    return subleq_words_to_observation_one_hot(arr, word_size)
-
-
-def observation_to_subleq_words(arr: Array) -> Array:
-    """
-    Convert from an encoded array to Subleq words.
-
-    Example:
-    ```
-    [[0, 1, 0, 0, 0, 0, 0, 0, 0],
-     [1, 0, 0, 0, 0, 0, 0, 0, 0],
-     [0, 0, 0, 0, 0, 1, 0, 0, 0],
-     [0, 0, 0, 0, 0, 0, 0, 0, 1]]
-    ```
-    becomes
-    ```
-    [1, 0, 5, 8]
-    ```
-    """
-    chex.assert_rank(arr, 2)
-    output = jnp.argmax(arr, axis=1)
-    chex.assert_shape(output, (arr.shape[0],))
+    shape = (arr.shape[0], binary_encoding_width(word_size))
+    modulo = (arr % word_size).astype(jnp.uint8)
+    unpacked = jnp.unpackbits(modulo[:, jnp.newaxis], axis=1, count=shape[1], bitorder="little")
+    chex.assert_shape(unpacked, shape)
+    chex.assert_type(unpacked, jnp.uint8)
+    unpacked = unpacked > 0
+    chex.assert_type(unpacked, jnp.bool)
+    output = unpacked.at[jnp.arange(shape[0]), shape[1] - 1].set(arr == word_size)
+    chex.assert_shape(output, shape)
     return output
 
 
@@ -583,15 +565,28 @@ class Subleq(pgx.Env):
     """
 
     def __init__(
-        self, tasks: list[SubleqTask], word_size: int = 256, reward_fn: SubleqRewardFn = solved_or_not
+        self,
+        tasks: list[SubleqTask],
+        word_size: int = 256,
+        reward_fn: SubleqRewardFn = solved_or_not,
+        use_binary_encoding: bool = False,
     ) -> None:
         assert 16 <= word_size <= 256
         super().__init__()
         self.tasks = jnp.array(tasks)
         self.reward_fn = reward_fn
+
         self.word_size = word_size
         # Words are one-hot encoded, with an extra column for a special token used to fill out input/output.
         self.token_size = word_size + 1
+
+        self.observation_fn = (
+            subleq_words_to_observation_binary if use_binary_encoding else subleq_words_to_observation_one_hot
+        )
+        self.expected_observation_shape = (
+            self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH),
+            binary_encoding_width(self.word_size) if use_binary_encoding else self.token_size,
+        )
 
     def _init(self, key: PRNGKey) -> SubleqState:
         task: Array = jax.random.choice(key, self.tasks)
@@ -669,16 +664,14 @@ class Subleq(pgx.Env):
         )
         observation = jnp.concatenate(
             [
-                subleq_words_to_observation(state._memory_state, self.word_size),
-                subleq_words_to_observation(state._example_input, self.word_size),
-                subleq_words_to_observation(state._example_input_after, self.word_size),
-                subleq_words_to_observation(state._example_output, self.word_size),
-                subleq_words_to_observation(state._example_output_after, self.word_size),
+                self.observation_fn(state._memory_state, self.word_size),
+                self.observation_fn(state._example_input, self.word_size),
+                self.observation_fn(state._example_input_after, self.word_size),
+                self.observation_fn(state._example_output, self.word_size),
+                self.observation_fn(state._example_output_after, self.word_size),
             ]
         )
-        chex.assert_shape(
-            observation, [self.word_size + 2 * (MAXIMUM_INPUT_LENGTH + MAXIMUM_OUTPUT_LENGTH), self.token_size]
-        )
+        chex.assert_shape(observation, self.expected_observation_shape)
         return observation
 
     @property
