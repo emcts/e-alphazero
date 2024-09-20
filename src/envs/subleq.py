@@ -23,33 +23,75 @@ assert MAXIMUM_INPUT_LENGTH >= 8
 assert MAXIMUM_OUTPUT_LENGTH >= 8
 
 
-def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
+def subleq_words_to_observation_one_hot(arr: Array, word_size: int) -> Array:
     """
-    Convert from Subleq words to an encoded array (e.g. one-hot).
+    Convert from Subleq words to an encoded array (in this case one-hot).
 
     Example:
     ```
-    word_size = 8, [1, 3, 5, -1]
+    word_size = 8, [1, 3, 5, -1, 8]
     ```
     becomes
     ```
     [[0, 1, 0, 0, 0, 0, 0, 0, 0],
      [0, 0, 0, 1, 0, 0, 0, 0, 0],
      [0, 0, 0, 0, 0, 1, 0, 0, 0],
-     [0, 0, 0, 0, 0, 0, 0, 1, 0]]
+     [0, 0, 0, 0, 0, 0, 0, 1, 0],
+     [0, 0, 0, 0, 0, 0, 0, 0, 1]]
     ```
-    Note that a negative number `-x` is treated as `size - x`
-    since they are the same in `size`-modular arithmetic.
-
-    Numbers which equal `size` are treated special since they represent
-    special tokens used to fill up input/output so that the size is always the same.
+    The resulting shape for an input array size `n` will be `(n, word_size + 1)`.
     """
-    chex.assert_rank(arr, 1)
     indices = jnp.where(arr == word_size, word_size, arr % word_size)
     shape = (arr.shape[0], word_size + 1)
     output = jnp.zeros(shape, dtype=jnp.bool).at[jnp.arange(shape[0]), indices].set(True, unique_indices=True)
     chex.assert_shape(output, shape)
     return output
+
+
+def subleq_words_to_observation_binary(arr: Array, word_size: int) -> Array:
+    """
+    Convert from Subleq words to an encoded array (in this case binary).
+
+    Example:
+    ```
+    word_size = 16, [1, 3, 5, -1, 16]
+    ```
+    becomes
+    ```
+    [[1, 0, 0, 0, 0],
+     [1, 1, 0, 0, 0],
+     [1, 0, 1, 0, 0],
+     [1, 1, 1, 1, 0]
+     [0, 0, 0, 0, 1]]
+    ```
+    The resulting shape for an input array size `n` will be `(n, word_size.bit_length() + 1)`.
+    """
+    bit_length = (word_size - 1).bit_length()
+    shape = (arr.shape[0], bit_length + 1)
+    modulo = (arr % word_size).astype(jnp.uint8)
+    unpacked = jnp.unpackbits(modulo[:, jnp.newaxis], axis=1, count=shape[1], bitorder="little")
+    chex.assert_shape(unpacked, shape)
+    output = (unpacked > 0).at[arr == word_size, bit_length].set(True)
+    chex.assert_shape(output, shape)
+    return output
+
+
+def subleq_words_to_observation(arr: Array, word_size: int) -> Array:
+    """
+    Convert from Subleq words to an encoded array.
+
+    See `subleq_words_to_observation_one_hot` and `subleq_words_to_observation_binary`.
+
+    Note that a negative number `-x` is treated as `word_size - x`
+    since they are the same in `word_size`-modular arithmetic.
+
+    Numbers which equal `word_size` are treated differently since they represent
+    special tokens used to fill up input/output so that the size is always the same.
+    For those tokens, the last column is 1.
+    """
+    chex.assert_rank(arr, 1)
+    # return subleq_words_to_observation_binary(arr, word_size)
+    return subleq_words_to_observation_one_hot(arr, word_size)
 
 
 def observation_to_subleq_words(arr: Array) -> Array:
