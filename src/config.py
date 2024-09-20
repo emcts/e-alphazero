@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 import pgx  # type: ignore
 import pydantic
+from envs import subleq
 
 
 class Config(pydantic.BaseModel):
@@ -14,6 +15,8 @@ class Config(pydantic.BaseModel):
     seed: int | None = None     # If None, seeds automatically with a random large integer
     env_class: Literal["pgx", "custom"] = "pgx"
     env_id: pgx.EnvId | str = "minatar-breakout"
+    subleq_task: str = "NEGATION_POSITIVE"  # implemented as str to make adding tasks easier
+    use_binary_encoding: bool = True  # only applies to subleq, vectors are in binary, if False then 1 hot
     maximum_number_of_iterations: int = 2000
     two_players_game: bool = False
     max_episode_length: int = 500  # May want to change this per env
@@ -117,7 +120,8 @@ def setup_config(config: Config) -> Config:
         else:
             raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
     elif "subleq" in config.env_id:
-        pass
+        config.discount = 0.97
+        config.max_episode_length = 10
     else:
         print(f"Setting up an environment without unique config setup")
 
