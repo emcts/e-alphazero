@@ -57,10 +57,19 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             max_epistemic_variance_reward=config.max_epistemic_variance_reward,
         )
     elif "deep_sea" in config.env_id or "subleq" in config.env_id:
+        if str(config.env_id).startswith("subleq"):
+            s = str(config.env_id).removeprefix("subleq-")
+            word_size = int(s) if s.isnumeric() else 256
+            subleq = True
+        else:
+            word_size = 0
+            subleq = False
         return EpistemicFullyConnectedAZNet(
             num_actions=env.num_actions,
             discount=config.discount,
             hash_class=hash_class,
+            word_size=word_size,
+            hash_io=subleq and config.subleq_hash_only_io
         )
     else:
         # TODO: Add missing hyper-params to config (e.g. hash_bits, hidden_layers, etc.)

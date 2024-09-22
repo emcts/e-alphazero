@@ -22,6 +22,8 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         hash_class: Type = SimHash,
         hash_args: dict[str, Any] | None = None,
         name="fc_az_net",
+        word_size: int = 16,
+        hash_io: bool = False
     ):
         super().__init__(name=name)
         self.num_actions = num_actions
@@ -33,12 +35,15 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         discount = min(discount, 0.9997)
         self.local_unc_to_max_value_unc_scale = 1.0 / (1 - discount**2)
         self.max_reward_epistemic_variance = max_epistemic_variance_reward
+        self.word_size = word_size
+        self.hash_io = hash_io
 
     def __call__(
         self, x: Observation, is_training: bool, test_local_stats: bool, update_hash: bool = False
     ) -> NetworkOutput:
         # body
         x = x.astype(jnp.float32)
+        unflattened_x = x
         x = hk.Flatten()(x)
 
         # value head
@@ -73,7 +78,12 @@ class EpistemicFullyConnectedAZNet(hk.Module):
 
         # local uncertainty
         hash_obj = self.hash_class(**self.hash_args)
-        scaled_state_novelty = ~hash_obj(x) * self.max_reward_epistemic_variance
+        if self.hash_io:
+            hash_input = unflattened_x[:, self.word_size:, :]
+            hash_input = hk.Flatten()(hash_input)
+        else:
+            hash_input = x
+        scaled_state_novelty = ~hash_obj(hash_input) * self.max_reward_epistemic_variance
 
         if not is_training:
             u = u * self.max_u
@@ -82,6 +92,6 @@ class EpistemicFullyConnectedAZNet(hk.Module):
             u = u.clip(min=0, max=self.max_u)
 
         if update_hash:
-            hash_obj.update(x)
+            hash_obj.update(hash_input)
 
         return main_policy_logits, exploration_policy_logits, v, u, scaled_state_novelty

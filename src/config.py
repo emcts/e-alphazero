@@ -27,6 +27,7 @@ class Config(pydantic.BaseModel):
     hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "XXHash"
     hash_path: str = "minatar_az_net/xxhash32"
     max_epistemic_variance_reward: float = 1.0
+    subleq_hash_only_io: bool = True
     # UBE parameters
     max_ube: float = 1.0  # Approx. max_value ** 2, used to bound the predictions of UBE
     exploration_ube_target: bool = True     # If true, ube target is max_child_unc. Otherwise, it's chosen child's unc.
@@ -130,7 +131,7 @@ def setup_config(config: Config) -> Config:
 
     # Debug overwrites the unique config
     if config.debug:
-        config.env_id = "deep_sea-20"
+        config.env_id = "subleq-16"
         config.env_class = "custom"
         config.selfplay_batch_size = 8
         config.selfplay_simulations_per_step = 16
@@ -140,7 +141,7 @@ def setup_config(config: Config) -> Config:
         config.max_replay_buffer_length = 100_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 256
-        config.hash_class = "XXHash"
+        config.hash_class = "SimHash"
         config.track = False
         config.eval_interval = 1
         config.maximum_number_of_iterations = 50
