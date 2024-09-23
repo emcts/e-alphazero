@@ -348,6 +348,7 @@ def main() -> None:
             last_states, (states, root_values, root_epistemic_stds, raw_values, ube_predictions, q_value_variances) = (
                 selfplay(model, config, context, last_states, jax.random.split(subkey, num_devices))
             )
+            all_rewards = states.rewards.sum().item()
             log.update(
                 {
                     "mean_raw_value": raw_values.mean().item(),
@@ -355,6 +356,7 @@ def main() -> None:
                     "mean_ube": ube_predictions.mean().item(),
                     "mean_root_epistemic_std": root_epistemic_stds.mean().item(),
                     "mean_root_max_child_epistemic_variance": q_value_variances.max(axis=-1).mean().item(),
+                    "observed_rewards": all_rewards,
                 }
             )
 
