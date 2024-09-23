@@ -183,11 +183,11 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                                                                                                                           use_binary_encoding=use_binary_encoding,
                                                                                                                           subleq_hash_only_io=hash_only_io
                                                                                                                           )
-                                                                        seeds.append(seed)
-                                                                        run_names.append(run_name)
-                                                                        paths_list.append(f"/{env_id}/eaz/{run_name}")
-                                                                        all_experiments.append(script_text)
-                                                                        full_params_list.append(full_params)
+                                                                            seeds.append(seed)
+                                                                            run_names.append(run_name)
+                                                                            paths_list.append(f"/{env_id}/eaz/{run_name}")
+                                                                            all_experiments.append(script_text)
+                                                                            full_params_list.append(full_params)
 
     return all_experiments, run_names, seeds, full_params_list, paths_list
 
@@ -206,9 +206,9 @@ learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
 sample_actions = [False]
 sample_actions_from_improved_policy = [False]
 scale_values = [True]
-directed_exploration = [True, False]
-training_to_interactions_ratios = [8]
-hash_classes = ["SimHash"]    # "LCGHash", "XXHash", "SimHash"
+directed_exploration = [True]
+training_to_interactions_ratios = [4]
+hash_classes = ["SimHash", "XXHash"]    # "LCGHash", "XXHash", "SimHash"
 exploration_ube_targets = [True]
 reanalyze_betas = [0.0]
 weigh_losses = [False]    # Defaults to False

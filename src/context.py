@@ -31,6 +31,7 @@ class Context(NamedTuple):
     max_ube: float
     weigh_losses: bool
     loss_weighting_temperature: float
+    directed_exploration: bool
 
     # HACK: Should be fine since there will only ever be one `Context`.
     def __hash__(self):

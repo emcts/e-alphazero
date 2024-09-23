@@ -122,10 +122,10 @@ def setup_config(config: Config) -> Config:
             raise ValueError(f"Unrecognized minatar environment. env_id was {config.env_id}")
     elif "subleq" in config.env_id:
         config.discount = 0.97
-        config.max_episode_length = 16
-        config.max_replay_buffer_length = 100000
+        config.max_episode_length = 10
+        config.max_replay_buffer_length = 200000
         config.selfplay_batch_size = 128
-        config.priority_exponent = 0.9
+        config.priority_exponent = 0.6
     else:
         print(f"Setting up an environment without unique config setup")
 

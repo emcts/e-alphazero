@@ -43,7 +43,7 @@ def loss_fn(model_params, model_state, context: Context, reanalyze_output: Reana
                           exploration_policy_loss + ube_loss)
 
     # Compute error for priority:
-    error_beta = jax.lax.cond(context.exploration_beta > 0.0 and False, lambda: 0.1, lambda: 0.0)
+    error_beta = jax.lax.cond(context.exploration_beta > 0.0 and context.directed_exploration, lambda: 0.1, lambda: 0.0)
     # The UBE prediction and target need to be rescaled [0,1] -> [0,max] -> sqrt([0,max])
     rescaled_ube_prediction = jnp.sqrt(jnp.abs(value_epistemic_variance))
     rescaled_ube_target = jnp.sqrt(reanalyze_output.ube_target)

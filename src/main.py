@@ -283,6 +283,7 @@ def main() -> None:
         max_ube=config.max_ube,
         weigh_losses=config.weigh_losses,
         loss_weighting_temperature=config.loss_weighting_temperature,
+        directed_exploration=config.directed_exploration
     )
 
     # Training loop
