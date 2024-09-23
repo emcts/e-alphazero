@@ -108,19 +108,19 @@ def pad(array: Array, desired_size: int, word_size: int) -> Array:
 
 
 class SubleqTask(IntEnum):
-    NEGATION_POSITIVE = auto()
-    NEGATION = auto()
-    IDENTITY = auto()   # Known min solution length: 6
-    SUBTRACTION = auto()
-    ADDITION = auto()
-    MAXIMUM = auto()
-    MINIMUM = auto()
-    COMPARISON = auto()
-    SORT_2 = auto()
-    SORT_3 = auto()
-    SORT_4 = auto()
-    MULTIPLICATION = auto()
-    DIVISION = auto()
+    NEGATION_POSITIVE = auto()  # Upper bound on min solution length: 2
+    NEGATION = auto()  # Upper bound on min solution length: 5
+    IDENTITY = auto()   # Upper bound on min solution length: 6
+    SUBTRACTION = auto()      # Upper bound on min solution length: 15
+    ADDITION = auto()   # Upper bound on min solution length: 7
+    MAXIMUM = auto()   #TODO: not implemented
+    MINIMUM = auto()   #TODO: not implemented
+    COMPARISON = auto()   #TODO: not implemented
+    SORT_2 = auto()   #TODO: not implemented
+    SORT_3 = auto()   #TODO: not implemented
+    SORT_4 = auto()   #TODO: not implemented
+    MULTIPLICATION = auto()   #TODO: not implemented
+    DIVISION = auto()   #TODO: not implemented
 
 
 class SubleqTestResult(NamedTuple):
@@ -430,6 +430,17 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
         jnp.array([-1, -1, 1, 1]),
     ]
 
+    addition_inputs = [
+        jnp.array([1, 1, 5, 4, 0, -3]),
+        jnp.array([2, 3, 0, 0, -1, -2]),
+        jnp.array([1, 2, 3, 4, 4, 3, 2, 1]),
+    ]
+    addition_outputs = [
+        jnp.array([2, 9, -3]),
+        jnp.array([5, 0, -3]),
+        jnp.array([3, 7, 7, 3]),
+    ]
+
     # TODO: Add other tasks.
     # TODO: Add more tests to each task as required.
 
@@ -457,6 +468,10 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
                 prepare(subtraction_outputs, MAXIMUM_OUTPUT_LENGTH),
             ),
             # SubleqTask.ADDITION
+            lambda: (
+                prepare(addition_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(addition_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
             # SubleqTask.MAXIMUM
             # SubleqTask.MINIMUM
             # SubleqTask.COMPARISON
