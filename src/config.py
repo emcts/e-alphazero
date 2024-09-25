@@ -59,9 +59,9 @@ class Config(pydantic.BaseModel):
     weigh_losses: bool = False      # If true, weighs losses with epistemic uncertainty
     loss_weighting_temperature: float = 10.0    # From Sunrise https://arxiv.org/pdf/2007.04938
     # checkpoints / eval
+    num_eval_episodes: int = 32
     checkpoint_interval: int = 5
     eval_interval: int = 5
-    evaluation_batch: int = 128
     # targets
     exploration_policy_target_temperature: float = 1.0
     discount: float = 0.997
@@ -75,11 +75,9 @@ class Config(pydantic.BaseModel):
     reanalyze_beta: Annotated[float, pydantic.Field(strict=True, le=0.0)] = (
         0.0  # used in reanalyze in emctx for epistemically reliable targets
     )
-    beta_schedule: bool = False  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
-    # Evaluation
-    num_eval_episodes: int = 32
+    beta_schedule: bool = True  # If true, betas for each game are evenly spaced between 0 and beta. Not yet imped.
+    # wandb and saving params
     results_path: str = "./evaluation_results"  # Defaults to an evaluation_results dir under src
-    # wandb params
     track: bool = True  # Whether to use WANDB or not. Disabled in debug
     wandb_project: str = "e-alphazero"
     wandb_run_name: str | None = None
@@ -139,7 +137,7 @@ def setup_config(config: Config) -> Config:
         config.reanalyze_simulations_per_step = 16
         config.selfplay_steps = 8
         config.reanalyze_batch_size = 256
-        config.max_replay_buffer_length = 100_000
+        config.max_replay_buffer_length = 300_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 256
         config.hash_class = "SimHash"
