@@ -15,7 +15,7 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         self,
         num_actions,
         num_hidden_layers: int = 3,
-        layer_size: int = 64,
+        layer_size: int = 256,
         max_ube: float = 1.0,
         max_epistemic_variance_reward: float = 1.0,
         discount: float = 0.9997,
@@ -47,18 +47,18 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         x = hk.Flatten()(x)
 
         # value head
-        v = hk.Linear(256)(x)
+        v = hk.Linear(self.hidden_layer_size)(x)
         v = jax.nn.relu(v)
-        v = hk.Linear(256)(v)
+        v = hk.Linear(self.hidden_layer_size)(v)
         v = jax.nn.relu(v)
         v = hk.Linear(1)(v)
         v = jnp.tanh(v)
         v = v.reshape((-1,))
 
         # ube head
-        u = hk.Linear(256)(x)
+        u = hk.Linear(self.hidden_layer_size)(x)
         u = jax.nn.relu(u)
-        u = hk.Linear(256)(u)
+        u = hk.Linear(self.hidden_layer_size)(u)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
         u = 0.5 * (jnp.tanh(u) + 1)
@@ -68,10 +68,14 @@ class EpistemicFullyConnectedAZNet(hk.Module):
         main_policy_logits = hk.Flatten()(x)
         main_policy_logits = hk.Linear(self.hidden_layer_size)(main_policy_logits)
         main_policy_logits = jax.nn.relu(main_policy_logits)
+        main_policy_logits = hk.Linear(self.hidden_layer_size)(main_policy_logits)
+        main_policy_logits = jax.nn.relu(main_policy_logits)
         main_policy_logits = hk.Linear(self.num_actions)(main_policy_logits)
 
         # exploration_policy head
         exploration_policy_logits = hk.Flatten()(x)
+        exploration_policy_logits = hk.Linear(self.hidden_layer_size)(exploration_policy_logits)
+        exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
         exploration_policy_logits = hk.Linear(self.hidden_layer_size)(exploration_policy_logits)
         exploration_policy_logits = jax.nn.relu(exploration_policy_logits)
         exploration_policy_logits = hk.Linear(self.num_actions)(exploration_policy_logits)

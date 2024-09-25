@@ -21,7 +21,7 @@ class Config(pydantic.BaseModel):
     two_players_game: bool = False
     max_episode_length: int = 500  # May want to change this per env
     # network
-    linear_layer_size: int = 128
+    linear_layer_size: int = 256
     num_channels: int = 16
     # Local uncertainty parameters
     hash_class: Literal["SimHash", "LCGHash", "XXHash"] = "XXHash"
@@ -126,6 +126,7 @@ def setup_config(config: Config) -> Config:
         config.max_replay_buffer_length = 200000
         config.selfplay_batch_size = 128
         config.priority_exponent = 0.6
+        config.linear_layer_size = 256
     else:
         print(f"Setting up an environment without unique config setup")
 

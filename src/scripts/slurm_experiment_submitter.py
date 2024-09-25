@@ -156,7 +156,7 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
                                                                                 qos = "long"
                                                                             # Setup viac experiments
                                                                             seed = random.randrange(low, high)
-                                                                            run_name = f"eaz_{seed}_{env_id}_{time.asctime(time.localtime(time.time()))}"
+                                                                            run_name = f"eaz_{seed}_{subleq_task}_de={do_directed_exploration}_hio={hash_only_io}_{time.asctime(time.localtime(time.time()))}"
                                                                             local_results_path = results_path + f"/{env_id}/eaz/"
                                                                             script_text, full_params = make_sbatch_script(environment=env_id,
                                                                                                                           seed=seed,
@@ -194,27 +194,27 @@ def make_all_experiments(num_seeds, exploration_betas, environments, learning_ra
 
 submit_on_cluster = False
 environments = ["subleq-16"]#, "minatar-asterix", "minatar-seaquest", "minatar-freeway", "minatar-space_invaders"]
-num_seeds = 2
+num_seeds = 10
 purpose = "Subleq 16 experiments"
 results_path = "/mnt/results"  # "/home/yaniv"      # "/tudelft.net/staff-umbrella/yaniv/viac/results"
 true_results_path = "/tudelft.net/staff-umbrella/inadequate/emctx/results"
 local_results_path = "/home/yaniv"
-maximum_number_of_iterations = 2000
+maximum_number_of_iterations = 2002
 exploration_betas = [1.0]
 exploitation_betas = [0.0]
 learning_rates = [0.001] # [0.005, 0.001, 0.5 * 0.001, 0.0001, 0.5 * 0.0001]
 sample_actions = [False]
 sample_actions_from_improved_policy = [False]
 scale_values = [True]
-directed_exploration = [True]
+directed_exploration = [True, False]
 training_to_interactions_ratios = [4]
-hash_classes = ["SimHash", "XXHash"]    # "LCGHash", "XXHash", "SimHash"
+hash_classes = ["XXHash"]    # "LCGHash", "XXHash", "SimHash"
 exploration_ube_targets = [True]
 reanalyze_betas = [0.0]
 weigh_losses = [False]    # Defaults to False
 loss_weighting_temperatures = [10] # Defaults to 10
 subleq_use_binary_encoding = [True]
-subleq_tasks = ["NEGATION_POSITIVE", "NEGATION", "IDENTITY", "MAXIMUM", "MINIMUM", "SUBTRACTION", "ADDITION", "COMPARISON", "SORT_2", "SORT_3", "SORT_4", "MULTIPLICATION", "DIVISION"]
+subleq_tasks = ["NEGATION_POSITIVE", "IDENTITY", "NEGATION"] # ["NEGATION_POSITIVE", "NEGATION", "IDENTITY", "MAXIMUM", "MINIMUM", "SUBTRACTION", "ADDITION", "COMPARISON", "SORT_2", "SORT_3", "SORT_4", "MULTIPLICATION", "DIVISION"]
 subleq_hash_only_io = [True]
 
 save_jobs_paths = True

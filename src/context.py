@@ -70,7 +70,8 @@ def get_network(env: pgx.Env, config: Config) -> hk.Module:
             discount=config.discount,
             hash_class=hash_class,
             word_size=word_size,
-            hash_io=subleq and config.subleq_hash_only_io
+            hash_io=subleq and config.subleq_hash_only_io,
+            layer_size=config.linear_layer_size,
         )
     else:
         # TODO: Add missing hyper-params to config (e.g. hash_bits, hidden_layers, etc.)
