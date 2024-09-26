@@ -247,6 +247,7 @@ def main() -> None:
 
     mean_returns_list = []
     frames_at_mean_returns_list = []
+    rewards_not_yet_observed_flag = True
 
     context = Context(
         env=env,
@@ -349,6 +350,12 @@ def main() -> None:
                 selfplay(model, config, context, last_states, jax.random.split(subkey, num_devices))
             )
             all_rewards = states.rewards.sum().item()
+            if rewards_not_yet_observed_flag and all_rewards > 0:
+                frames_to_first_reward = frames + config.selfplay_batch_size * config.selfplay_steps
+                print(f"Observed first reward after frames: {frames_to_first_reward}")
+                rewards_not_yet_observed_flag = False
+                log.update({"frames_to_first_reward": frames_to_first_reward})
+
             log.update(
                 {
                     "mean_raw_value": raw_values.mean().item(),
