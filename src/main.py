@@ -160,33 +160,35 @@ def main() -> None:
             # TODO: Make tasks configurable with command line args
             # TODO: Make reward function configurable with command line args
             tasks = []
-            match config.subleq_task:
-                case "NEGATION_POSITIVE":
-                    tasks.append(SubleqTask.NEGATION_POSITIVE)
-                case "NEGATION":
-                    tasks.append(SubleqTask.NEGATION)
-                case "IDENTITY":
-                    tasks.append(SubleqTask.IDENTITY)
-                case "MAXIMUM":
-                    tasks.append(SubleqTask.MAXIMUM)
-                case "MINIMUM":
-                    tasks.append(SubleqTask.MINIMUM)
-                case "SUBTRACTION":
-                    tasks.append(SubleqTask.SUBTRACTION)
-                case "ADDITION":
-                    tasks.append(SubleqTask.ADDITION)
-                case "COMPARISON":
-                    tasks.append(SubleqTask.COMPARISON)
-                case "SORT_2":
-                    tasks.append(SubleqTask.SORT_2)
-                case "SORT_3":
-                    tasks.append(SubleqTask.SORT_3)
-                case "SORT_4":
-                    tasks.append(SubleqTask.SORT_4)
-                case "MULTIPLICATION":
-                    tasks.append(SubleqTask.MULTIPLICATION)
-                case "DIVISION":
-                    tasks.append(SubleqTask.DIVISION)
+            for task in config.subleq_tasks:
+                match task:
+                    case "NEGATION_POSITIVE":
+                        tasks.append(SubleqTask.NEGATION_POSITIVE)
+                    case "NEGATION":
+                        tasks.append(SubleqTask.NEGATION)
+                    case "IDENTITY":
+                        tasks.append(SubleqTask.IDENTITY)
+                    case "MAXIMUM":
+                        tasks.append(SubleqTask.MAXIMUM)
+                    case "MINIMUM":
+                        tasks.append(SubleqTask.MINIMUM)
+                    case "SUBTRACTION":
+                        tasks.append(SubleqTask.SUBTRACTION)
+                    case "ADDITION":
+                        tasks.append(SubleqTask.ADDITION)
+                    case "COMPARISON":
+                        tasks.append(SubleqTask.COMPARISON)
+                    case "SORT_2":
+                        tasks.append(SubleqTask.SORT_2)
+                    case "SORT_3":
+                        tasks.append(SubleqTask.SORT_3)
+                    case "SORT_4":
+                        tasks.append(SubleqTask.SORT_4)
+                    case "MULTIPLICATION":
+                        tasks.append(SubleqTask.MULTIPLICATION)
+                    case "DIVISION":
+                        tasks.append(SubleqTask.DIVISION)
+            print(f"len(tasks) = {len(tasks)}, tasks = {tasks}")
             env = TimeoutTerminationWrapper(Subleq(tasks=tasks, word_size=word_size, use_binary_encoding=config.use_binary_encoding), timelimit=config.max_episode_length)
         case ("pgx", env_id) if env_id in pgx.available_envs():
             if "minatar" in env_id:

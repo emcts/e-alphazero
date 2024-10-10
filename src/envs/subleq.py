@@ -121,6 +121,7 @@ class SubleqTask(IntEnum):
     SORT_4 = auto()   #TODO: not implemented
     MULTIPLICATION = auto()   #TODO: not implemented
     DIVISION = auto()   #TODO: not implemented
+    SUMMATION = auto()   #TODO: not implemented
 
 
 class SubleqTestResult(NamedTuple):
@@ -441,6 +442,17 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
         jnp.array([3, 7, 7, 3]),
     ]
 
+    multiplication_inputs = [
+        jnp.array([1, 2, 2, 3, -7, 4]),
+        jnp.array([-1, -5, 5, 2, 0, 1]),
+        jnp.array([0, 0, 1, 1, -3, 3]),
+    ]
+    multiplication_outputs = [
+        jnp.array([1 * 2, 2 * 3, -7 * 4]),
+        jnp.array([-1 * -5, 5 * 2, 0 * 1]),
+        jnp.array([0 * 0, 1 * 1, -3 * 3]),
+    ]
+
     # TODO: Add other tasks.
     # TODO: Add more tests to each task as required.
 
@@ -472,6 +484,7 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
                 prepare(addition_inputs, MAXIMUM_INPUT_LENGTH),
                 prepare(addition_outputs, MAXIMUM_OUTPUT_LENGTH),
             ),
+            # SubleqTask.SUMMATION
             # SubleqTask.MAXIMUM
             # SubleqTask.MINIMUM
             # SubleqTask.COMPARISON
@@ -479,6 +492,10 @@ def get_test_cases(task: Array, word_size: int) -> tuple[Array, Array]:
             # SubleqTask.SORT_3
             # SubleqTask.SORT_4
             # SubleqTask.MULTIPLICATION
+            lambda: (
+                prepare(multiplication_inputs, MAXIMUM_INPUT_LENGTH),
+                prepare(multiplication_outputs, MAXIMUM_OUTPUT_LENGTH),
+            ),
             # SubleqTask.DIVISION
         ],
     )

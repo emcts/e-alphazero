@@ -15,7 +15,7 @@ class Config(pydantic.BaseModel):
     seed: int | None = None     # If None, seeds automatically with a random large integer
     env_class: Literal["pgx", "custom"] = "pgx"
     env_id: pgx.EnvId | str = "minatar-breakout"
-    subleq_task: str = "NEGATION_POSITIVE"  # implemented as str to make adding tasks easier
+    subleq_tasks: list[str] = pydantic.Field(default_factory=lambda: ["NEGATION_POSITIVE"])
     use_binary_encoding: bool = True  # only applies to subleq, vectors are in binary, if False then 1 hot
     maximum_number_of_iterations: int = 2000
     two_players_game: bool = False
@@ -125,6 +125,7 @@ def setup_config(config: Config) -> Config:
         config.selfplay_batch_size = 128
         config.priority_exponent = 0.6
         config.linear_layer_size = 256
+        config.num_eval_episodes = 128
     else:
         print(f"Setting up an environment without unique config setup")
 
