@@ -94,6 +94,7 @@ class EpistemicMinatarAZNet(hk.Module):
         u = hk.Linear(self.hidden_layers_size)(x2)
         u = jax.nn.relu(u)
         u = hk.Linear(1)(u)
+        u = jax.nn.softplus(u)
         # Note that u is a scalar between 0 and 1, 1 representing max unc. This is done for stability and learning speed
         # u = 0.5 * (jnp.tanh(u) + 1)
         u = u.reshape((-1,))

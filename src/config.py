@@ -19,7 +19,7 @@ class Config(pydantic.BaseModel):
     use_binary_encoding: bool = True  # only applies to subleq, vectors are in binary, if False then 1 hot
     maximum_number_of_iterations: int = 2000
     two_players_game: bool = False
-    max_episode_length: int = 500  # May want to change this per env
+    max_episode_length: int = 1000  # May want to change this per env
     # network
     linear_layer_size: int = 256
     num_channels: int = 16
@@ -59,7 +59,7 @@ class Config(pydantic.BaseModel):
     weigh_losses: bool = False      # If true, weighs losses with epistemic uncertainty
     loss_weighting_temperature: float = 10.0    # From Sunrise https://arxiv.org/pdf/2007.04938
     # checkpoints / eval
-    num_eval_episodes: int = 32
+    num_eval_episodes: int = 128
     checkpoint_interval: int = 5
     eval_interval: int = 5
     # targets
@@ -106,6 +106,7 @@ def setup_config(config: Config) -> Config:
         config.selfplay_batch_size = 16
         config.max_ube = 1.0
     elif "minatar" in config.env_id:
+        config.discount = 0.98
         if "breakout" in config.env_id:
             config.max_ube = 40 ** 2
         elif "space_invaders" in config.env_id:
@@ -131,8 +132,8 @@ def setup_config(config: Config) -> Config:
 
     # Debug overwrites the unique config
     if config.debug:
-        config.env_id = "subleq-16"
-        config.env_class = "custom"
+        config.env_id = "minatar-breakout"
+        config.env_class = "pgx"
         config.selfplay_batch_size = 8
         config.selfplay_simulations_per_step = 16
         config.reanalyze_simulations_per_step = 16
@@ -141,7 +142,7 @@ def setup_config(config: Config) -> Config:
         config.max_replay_buffer_length = 300_000
         config.min_replay_buffer_length = 64
         config.learning_starts = 256
-        config.hash_class = "SimHash"
+        config.hash_class = "XXHash"
         config.track = False
         config.eval_interval = 1
         config.maximum_number_of_iterations = 50
@@ -157,7 +158,6 @@ def setup_config(config: Config) -> Config:
     config.two_players_game = config.env_class == "pgx" and not "minatar" in config.env_id
     config.hash_path = "minatar_az_net/" if "minatar" in config.env_id else "fc_az_net/"
     config.hash_path += "sim_hash" if config.hash_class == "SimHash" else "xxhash32"
-
 
     config.reanalyze_loops_per_selfplay = max(
         1,

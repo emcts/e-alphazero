@@ -419,6 +419,15 @@ def main() -> None:
                     jax.tree.map(lambda x: jnp.array(jnp.split(x, num_devices)), batch.experience),
                     jax.random.split(subkey, num_devices),
                 )
+
+                _observation, _next_observation, value_target, ube_target, _exploration_policy_target, _exploitation_policy_target = reanalyze_output
+                log.update(
+                    {
+                        "train/mean_value_target": value_target.mean().item(),
+                        "train/mean_ube_target": ube_target.mean().item(),
+                    }
+                )
+
                 # Make sure that gradients don't pass through the targets
                 reanalyze_output = jax.tree_util.tree_map(jax.lax.stop_gradient, reanalyze_output)
                 if config.debug and "deep-sea" in config.env_id:
