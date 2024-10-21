@@ -60,7 +60,7 @@ class Config(pydantic.BaseModel):
     loss_weighting_temperature: float = 10.0    # From Sunrise https://arxiv.org/pdf/2007.04938
     # checkpoints / eval
     num_eval_episodes: int = 128
-    checkpoint_interval: int = 5
+    checkpoint_interval: int = 500
     eval_interval: int = 5
     # targets
     exploration_policy_target_temperature: float = 1.0
