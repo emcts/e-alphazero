@@ -4,9 +4,9 @@ This repository contains an implementation of Epistemic AlphaZero which is an mo
 that uses Epistemic Monte Carlo Tree Search ([E-MCTS]). We use [JAX] to make efficient use of GPU acceleration.
 Our framework is compatible with [pgx] environments, and in fact we implement two new ones: DeepSea and Subleq, (see `src/envs/`).
 
-See also [emctx], a fork of [mctx] which supports epistemic uncertainty propagation as described in the E-MCTS paper.
+![Subleq Results](figs/results_subleq.png)
 
-![Subleq Results](figs/results_subleq_gray.pdf)
+See also [emctx], a fork of [mctx] which supports epistemic uncertainty propagation as described in the E-MCTS paper.
 
 ## Structure
 
@@ -27,7 +27,6 @@ See also [emctx], a fork of [mctx] which supports epistemic uncertainty propagat
 2. Install `pipenv` with `pip install --user pipenv`.
 3. Run `pipenv install` in this directory to install the required dependencies.
 4. Run `pipenv run python src/main.py` with optional configuration specified as space-separated `parameter=value`.
-
 
 [AlphaZero]: https://arxiv.org/abs/1712.01815
 [E-MCTS]: https://arxiv.org/abs/2210.13455v5
